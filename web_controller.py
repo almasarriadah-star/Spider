@@ -17,6 +17,9 @@ try:
 except Exception:
     pass
 
+# ── I2C Lock — حماية PCA9685 من threads المتعددة ──
+i2c_lock = threading.Lock()
+
 # ── BNO085 IMU Setup ──
 BNO_READY = False
 bno = None
@@ -37,20 +40,30 @@ except Exception:
 def read_bno_single():
     if not BNO_READY:
         return None
-    try:
-        yaw, pitch, roll, ax, ay, az = bno.heading
-        return {
-            "roll": round(roll - bno_zero_roll, 2),
-            "pitch": round(pitch - bno_zero_pitch, 2),
-            "yaw": round(yaw, 2),
-            "raw_roll": round(roll, 2),
-            "raw_pitch": round(pitch, 2),
-            "ax": round(ax, 3),
-            "ay": round(ay, 3),
-            "az": round(az, 3)
-        }
-    except Exception:
+    acquired = bno_lock.acquire(timeout=0.2)
+    if not acquired:
         return None
+    try:
+        old_timeout = uart.timeout
+        uart.timeout = 0.1  # 100ms max — ما نعلّق أبداً
+        try:
+            yaw, pitch, roll, ax, ay, az = bno.heading
+            return {
+                "roll": round(roll - bno_zero_roll, 2),
+                "pitch": round(pitch - bno_zero_pitch, 2),
+                "yaw": round(yaw, 2),
+                "raw_roll": round(roll, 2),
+                "raw_pitch": round(pitch, 2),
+                "ax": round(ax, 3),
+                "ay": round(ay, 3),
+                "az": round(az, 3)
+            }
+        except Exception:
+            return None
+        finally:
+            uart.timeout = old_timeout
+    finally:
+        bno_lock.release()
 
 # ── Constants ──
 MIN_ANGLE = 45
@@ -96,6 +109,7 @@ PRESETS_FILE = os.path.join(BASE_DIR, "leg_presets.json")
 GAIT_FILE = os.path.join(BASE_DIR, "gait_params.json")
 BALANCE_CONFIG_FILE = os.path.join(BASE_DIR, "balance_config.json")
 gait_running = False
+gait_event = threading.Event()  # thread-safe replacement
 gait_thread = None
 gait_lock = threading.Lock()
 gait_step_count = 0
@@ -122,12 +136,35 @@ def set_servo(key, angle):
     side = key[0]
     ch = int(key[1:])
     if HARDWARE:
-        if side == "R":
-            right_pca.servo[ch].angle = angle
-        else:
-            left_pca.servo[ch].angle = angle
+        with i2c_lock:
+            if side == "R":
+                right_pca.servo[ch].angle = angle
+            else:
+                left_pca.servo[ch].angle = angle
     current[key] = angle
     return angle
+
+
+def set_servos_batch(updates):
+    """يكتب عدة محركات دفعة واحدة ضمن قفل واحد — أسرع بكثير"""
+    _ensure_servos_on()
+    right_writes = {}
+    left_writes = {}
+    for key, angle in updates.items():
+        angle = limit_angle(angle)
+        side = key[0]
+        ch = int(key[1:])
+        if side == "R":
+            right_writes[ch] = angle
+        else:
+            left_writes[ch] = angle
+        current[key] = angle
+    if HARDWARE:
+        with i2c_lock:
+            for ch, angle in right_writes.items():
+                right_pca.servo[ch].angle = angle
+            for ch, angle in left_writes.items():
+                left_pca.servo[ch].angle = angle
 
 
 def load_json(path):
@@ -174,18 +211,19 @@ def apply_startup_calibration():
         return
     defaults = load_leg_defaults()
     print("Applying startup calibration...")
-    for group, keys in LEG_GROUPS.items():
-        for key in keys:
-            base = DEFAULT_RIGHT[int(key[1:])] if key[0] == "R" else DEFAULT_LEFT[int(key[1:])]
-            val = defaults.get(group, {}).get(key, base)
-            side = key[0]
-            ch = int(key[1:])
-            if side == "R":
-                right_pca.servo[ch].angle = val
-            else:
-                left_pca.servo[ch].angle = val
-            current[key] = val
-            time.sleep(0.03)
+    with i2c_lock:
+        for group, keys in LEG_GROUPS.items():
+            for key in keys:
+                base = DEFAULT_RIGHT[int(key[1:])] if key[0] == "R" else DEFAULT_LEFT[int(key[1:])]
+                val = defaults.get(group, {}).get(key, base)
+                side = key[0]
+                ch = int(key[1:])
+                if side == "R":
+                    right_pca.servo[ch].angle = val
+                else:
+                    left_pca.servo[ch].angle = val
+                current[key] = val
+                time.sleep(0.03)
     _servos_initialized = True
     print("Startup calibration applied - servos holding position")
 
@@ -225,10 +263,12 @@ def smooth_move_leg(keys, targets, steps=10, delay=0.03, easing=None):
             return
         t = step / steps
         t_eased = easing(t)
+        batch = {}
         for k in keys:
             if k in targets:
                 angle = starts[k] + (targets[k] - starts[k]) * t_eased
-                set_servo(k, round(angle))
+                batch[k] = round(angle)
+        set_servos_batch(batch)  # ← قفل واحد بدل 18
         time.sleep(delay)
 
 
@@ -336,7 +376,7 @@ def execute_gait(params, speed, max_steps):
     actual_steps = max(3, int(base_steps / speed))
     actual_delay = max(0.01, base_delay / speed)
 
-    while gait_running and (max_steps == 0 or gait_step_count < max_steps):
+    while gait_event.is_set() and (max_steps == 0 or gait_step_count < max_steps):
         # Phase 1: Group A swings forward, Group B pushes back
         gait_phase = "A"
         # Group A: stance -> lift -> swing_fwd
@@ -352,7 +392,7 @@ def execute_gait(params, speed, max_steps):
                 smooth_move_leg(leg_keys, params[group].get("push_back", params[group].get("stance", {})), actual_steps, actual_delay)
 
         gait_step_count += 1
-        if not gait_running:
+        if not gait_event.is_set():
             break
 
         # Phase 2: Group B swings forward, Group A pushes back
@@ -377,6 +417,7 @@ def execute_gait(params, speed, max_steps):
             smooth_move_leg(LEG_GROUPS[group], params[group].get("stance", {}), actual_steps, actual_delay)
 
     gait_running = False
+    gait_event.clear()
 
 
 def _load_gait_params(name="forward_tripod"):
@@ -413,7 +454,7 @@ def _run_forward_gait(params, speed=1.0, max_cycles=0, gait_type='forward'):
     frame = 0
     cycles = 0
 
-    while gait_running:
+    while gait_event.is_set():
         if max_cycles > 0 and cycles >= max_cycles:
             break
 
@@ -477,6 +518,7 @@ def _run_forward_gait(params, speed=1.0, max_cycles=0, gait_type='forward'):
     smooth_move_leg(list(stance_targets.keys()), stance_targets, steps=12, delay=0.03)
     gait_current_phase = "idle"
     gait_running = False
+    gait_event.clear()
 
 
 # ════════════════════════════════════════════════════════════════
@@ -664,9 +706,8 @@ class BalanceController:
                 self._stop_event.wait(sleep_time)
 
     def _balance_tick(self):
-        # 1. اقرأ IMU (داخل القفل)
-        with bno_lock:
-            imu = read_bno_single()
+        # 1. اقرأ IMU — read_bno_single بياخد bno_lock داخلياً
+        imu = read_bno_single()
 
         if imu is None:
             return
@@ -699,7 +740,7 @@ class BalanceController:
             self.femur_offsets[leg] = round(offset * direction, 1)
 
         # 6. طبّق التصحيح (فقط إذا ما في مشي شغّال)
-        if not gait_running:
+        if not gait_event.is_set():
             self._apply_corrections()
 
         # 7. سجّل للـ debug
@@ -805,6 +846,28 @@ def api_set_servo():
     return jsonify({"ok": False, "error": "invalid"}), 400
 
 
+@app.route("/api/reset", methods=["POST"])
+def api_reset():
+    """تصفير _force_stop — طوارئ إذا ظل True"""
+    global _force_stop
+    _force_stop = False
+    gait_event.clear()
+    return jsonify({"ok": True, "message": "force_stop cleared"})
+
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    """فحص سريع لحالة النظام"""
+    return jsonify({
+        "ok": True,
+        "imu": "connected" if BNO_READY else "disconnected",
+        "gait_running": gait_event.is_set(),
+        "force_stop": _force_stop,
+        "servos_initialized": _servos_initialized,
+        "balance": balance.enabled
+    })
+
+
 @app.route("/api/calibrate", methods=["POST"])
 def api_calibrate():
     defaults = load_leg_defaults()
@@ -829,11 +892,13 @@ def api_calibrate():
 @app.route("/api/off", methods=["POST"])
 def api_off():
     global gait_running, _force_stop
-    # 1. أوقف أي حركة فوراً
-    _force_stop = True
-    gait_running = False
-    time.sleep(0.05)
-    _force_stop = False
+    try:
+        _force_stop = True
+        gait_running = False
+        gait_event.clear()
+        time.sleep(0.1)
+    finally:
+        _force_stop = False  # ← مضمون التنفيذ
 
     if HARDWARE:
         try:
@@ -1046,8 +1111,7 @@ def api_imu_status():
 
 @app.route("/api/imu/read", methods=["GET"])
 def api_imu_read():
-    with bno_lock:
-        reading = read_bno_single()
+    reading = read_bno_single()
     if reading is None:
         return jsonify({"ok": False, "error": "BNO not available"})
     return jsonify({"ok": True, **reading, "zero_roll": bno_zero_roll, "zero_pitch": bno_zero_pitch})
@@ -1056,14 +1120,13 @@ def api_imu_read():
 @app.route("/api/imu/zero", methods=["POST"])
 def api_imu_zero():
     global bno_zero_roll, bno_zero_pitch
-    with bno_lock:
-        rolls, pitches = [], []
-        for _ in range(20):
-            r = read_bno_single()
-            if r:
-                rolls.append(r["raw_roll"])
-                pitches.append(r["raw_pitch"])
-            time.sleep(0.06)
+    rolls, pitches = [], []
+    for _ in range(20):
+        r = read_bno_single()  # بياخد bno_lock داخلياً
+        if r:
+            rolls.append(r["raw_roll"])
+            pitches.append(r["raw_pitch"])
+        time.sleep(0.06)
     if not rolls:
         return jsonify({"ok": False, "error": "Cannot read BNO"})
     bno_zero_roll = sum(rolls) / len(rolls)
@@ -1079,13 +1142,12 @@ def api_imu_zero():
 def api_imu_stream():
     count = int(request.args.get("count", 30))
     samples = []
-    with bno_lock:
-        for _ in range(count):
-            r = read_bno_single()
-            if r:
-                r["t"] = round(time.time() * 1000)
-                samples.append(r)
-            time.sleep(0.05)
+    for _ in range(count):
+        r = read_bno_single()  # بياخد bno_lock داخلياً
+        if r:
+            r["t"] = round(time.time() * 1000)
+            samples.append(r)
+        time.sleep(0.05)
     return jsonify({"ok": True, "samples": samples, "zero_roll": bno_zero_roll, "zero_pitch": bno_zero_pitch})
 
 
@@ -1169,7 +1231,7 @@ def api_gait_set_leg_pose():
 def api_gait_auto_start():
     """Start auto walking with a named plan"""
     global gait_running, gait_thread
-    if gait_running:
+    if gait_event.is_set():
         return jsonify({"ok": False, "error": "Already running"})
     data = request.json
     name = data.get("name", "")
@@ -1181,6 +1243,7 @@ def api_gait_auto_start():
         return jsonify({"ok": False, "error": "Plan not found"})
 
     gait_running = True
+    gait_event.set()
     gait_thread = threading.Thread(target=execute_gait, args=(plans[name]["params"], speed, max_steps), daemon=True)
     gait_thread.start()
     return jsonify({"ok": True, "msg": "Gait started"})
@@ -1191,6 +1254,7 @@ def api_gait_auto_stop():
     """Stop auto walking immediately"""
     global gait_running
     gait_running = False
+    gait_event.clear()
     # Wait briefly for thread to finish current moves
     time.sleep(0.1)
     return jsonify({"ok": True, "msg": "Gait stopped"})
@@ -1234,11 +1298,11 @@ def _run_ripple_gait(params, speed=1.0, max_cycles=0, direction='forward'):
     # تحضير lookup لقنوات كل رجل
     legs_order = list(params["legs"].keys())
 
-    while gait_running:
+    while gait_event.is_set():
         if max_cycles > 0 and cycles >= max_cycles:
             break
 
-        t = (frame / TOTAL_FRAMES) * 2 * math.pi
+        t_global = frame / TOTAL_FRAMES  # 0.0 → 1.0
 
         all_targets = {}
         for idx, leg_name in enumerate(RIPPLE_ORDER):
@@ -1247,34 +1311,46 @@ def _run_ripple_gait(params, speed=1.0, max_cycles=0, direction='forward'):
 
             # اتجاه الحركة
             if direction == 'strafe_left':
-                # كل الأرجل بتتحرك بنفس الاتجاه (يسار)
                 sign = -1
             elif direction == 'strafe_right':
-                # كل الأرجل بتتحرك بنفس الاتجاه (يمين)
                 sign = 1
             elif direction == 'turn_left':
-                # الجانب الأيسر للخلف والأيمن للأمام
-                sign = 1 if side == "R" else 1
-                # لكن اليسار بنفس الاتجاه عشان يدور
-                if side == "L":
-                    sign = 1  # L legs go forward too → turns left
+                sign = 1 if side == "R" else -1
             elif direction == 'turn_right':
-                sign = -1 if side == "R" else -1
-                if side == "R":
-                    sign = -1  # R legs go backward → turns right
+                sign = -1 if side == "R" else 1
             else:
-                # forward / backward
                 sign = 1 if side == "R" else -1
                 if direction == 'backward':
                     sign = -sign
 
-            # Phase مع إزاحة 60° لكل رجل
-            ph = t + idx * (2 * math.pi / 6)
+            # Phase مع إزاحة لكل رجل
+            leg_phase = (t_global + idx / len(RIPPLE_ORDER)) % 1.0
 
-            lift  = max(0, math.sin(ph)) * LIFT_DEG
-            swing = math.cos(ph) * SWING_DEG * sign
+            # ── Displacement-based gait ──
+            # Duty factor: كل رجل عالأرض 5/6 من الوقت
+            DUTY = 5.0 / 6.0
+            SWING_FRAC = 1.0 - DUTY  # 1/6
 
-            coxa  = leg["coxa_stand"]  + swing
+            if leg_phase < SWING_FRAC:
+                # === SWING (القدم بالهوا — تنتقل من الخلف للأمام) ===
+                swing_t = leg_phase / SWING_FRAC  # 0→1
+                swing_t_ease = ease_smoothstep(swing_t)
+
+                # Coxa: من الخلف للأمام
+                coxa_offset = (-SWING_DEG/2 + SWING_DEG * swing_t_ease) * sign
+                # Femur: رفع القدم (قوس)
+                lift = LIFT_DEG * math.sin(math.pi * swing_t)
+            else:
+                # === STANCE (القدم عالأرض — تدفع الجسم للأمام) ===
+                stance_t = (leg_phase - SWING_FRAC) / DUTY  # 0→1
+                stance_t_ease = ease_smoothstep(stance_t)
+
+                # Coxa: من الأمام للخلف (دفع)
+                coxa_offset = (SWING_DEG/2 - SWING_DEG * stance_t_ease) * sign
+                # Femur: على الأرض
+                lift = 0
+
+            coxa  = leg["coxa_stand"]  + coxa_offset
             femur = leg["femur_stand"] + lift
             tibia = leg["tibia"]       - lift * 0.4
 
@@ -1321,6 +1397,7 @@ def _run_ripple_gait(params, speed=1.0, max_cycles=0, direction='forward'):
     smooth_move_leg(list(stance_targets.keys()), stance_targets, steps=12, delay=0.03)
     gait_current_phase = "idle"
     gait_running = False
+    gait_event.clear()
 
 
 @app.route("/api/gait/ripple/start", methods=["POST"])
@@ -1328,7 +1405,7 @@ def ripple_gait_start():
     """تشغيل Ripple Gait — مشي العنكبوت المتناغم."""
     global gait_running, gait_thread, gait_step_count
 
-    if gait_running:
+    if gait_event.is_set():
         return jsonify({"ok": False, "error": "already running"})
 
     data = request.json or {}
@@ -1341,6 +1418,7 @@ def ripple_gait_start():
         return jsonify({"ok": False, "error": "ripple_gait_params.json not found"})
 
     gait_running = True
+    gait_event.set()
     gait_step_count = 0
     gait_current_phase = "ripple_starting"
 
@@ -1358,6 +1436,7 @@ def ripple_gait_stop():
     """إيقاف Ripple Gait."""
     global gait_running
     gait_running = False
+    gait_event.clear()
     return jsonify({"ok": True, "status": "ripple stopping..."})
 
 
@@ -1376,7 +1455,7 @@ def ripple_gait_status():
 def gait_forward_start():
     global gait_running, gait_thread, gait_step_count
 
-    if gait_running:
+    if gait_event.is_set():
         return jsonify({"ok": False, "error": "already running"})
 
     data = request.json or {}
@@ -1389,6 +1468,7 @@ def gait_forward_start():
         return jsonify({"ok": False, "error": "gait_params.json not found or invalid"})
 
     gait_running = True
+    gait_event.set()
     gait_step_count = 0
     gait_current_phase = "starting"
 
@@ -1405,6 +1485,7 @@ def gait_forward_start():
 def gait_forward_stop():
     global gait_running
     gait_running = False
+    gait_event.clear()
     return jsonify({"ok": True, "status": "stopping..."})
 
 
@@ -1431,10 +1512,11 @@ def gait_once():
         return jsonify({'ok': False, 'error': 'params not found'})
 
     global gait_running, gait_thread
-    if gait_running:
+    if gait_event.is_set():
         return jsonify({'ok': False, 'error': 'already running'})
 
     gait_running = True
+    gait_event.set()
     gait_thread  = threading.Thread(
         target=_run_forward_gait,
         args=(params, speed, cycles, gait_type),
@@ -1589,6 +1671,7 @@ def _move_spin(speed=1.0):
     if params:
         global gait_running
         gait_running = True
+        gait_event.set()
         _run_forward_gait(params, speed * 1.2, 8, 'turn_right')
 
 
@@ -1741,7 +1824,7 @@ def _run_smooth_ripple(params, speed=1.0, max_cycles=0, direction='forward'):
 
     legs_order = list(params["legs"].keys())
 
-    while gait_running:
+    while gait_event.is_set():
         if max_cycles > 0 and cycles >= max_cycles:
             break
 
@@ -1832,6 +1915,7 @@ def _run_smooth_ripple(params, speed=1.0, max_cycles=0, direction='forward'):
     smooth_move_leg(list(stance_targets.keys()), stance_targets, steps=12, delay=0.03)
     gait_current_phase = "idle"
     gait_running = False
+    gait_event.clear()
 
 
 @app.route('/api/gait/smooth-ripple/start', methods=['POST'])
@@ -1839,7 +1923,7 @@ def smooth_ripple_start():
     """تشغيل Smooth Ripple Gait — Foot Trajectory + Tibia ديناميكي."""
     global gait_running, gait_thread, gait_step_count
 
-    if gait_running:
+    if gait_event.is_set():
         return jsonify({"ok": False, "error": "already running"})
 
     data = request.json or {}
@@ -1852,6 +1936,7 @@ def smooth_ripple_start():
         return jsonify({"ok": False, "error": "ripple_gait_params.json not found"})
 
     gait_running = True
+    gait_event.set()
     gait_step_count = 0
     gait_current_phase = "smooth_ripple_starting"
 
@@ -1869,6 +1954,7 @@ def smooth_ripple_stop():
     """إيقاف Smooth Ripple Gait."""
     global gait_running
     gait_running = False
+    gait_event.clear()
     return jsonify({"ok": True, "status": "smooth ripple stopping..."})
 
 
@@ -1878,14 +1964,13 @@ def _startup_imu_zero():
     if not BNO_READY:
         return
     print("Zeroing IMU...")
-    with bno_lock:
-        rolls, pitches = [], []
-        for _ in range(20):
-            r = read_bno_single()
-            if r:
-                rolls.append(r["raw_roll"])
-                pitches.append(r["raw_pitch"])
-            time.sleep(0.06)
+    rolls, pitches = [], []
+    for _ in range(20):
+        r = read_bno_single()  # تستخدم bno_lock داخلياً — ما نستخدم with هنا
+        if r:
+            rolls.append(r["raw_roll"])
+            pitches.append(r["raw_pitch"])
+        time.sleep(0.06)
     if rolls:
         global bno_zero_roll, bno_zero_pitch
         bno_zero_roll = sum(rolls) / len(rolls)
