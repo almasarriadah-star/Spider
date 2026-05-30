@@ -131,7 +131,6 @@ def limit_angle(a):
 
 
 def set_servo(key, angle):
-    _ensure_servos_on()
     angle = limit_angle(angle)
     side = key[0]
     ch = int(key[1:])
@@ -147,7 +146,6 @@ def set_servo(key, angle):
 
 def set_servos_batch(updates):
     """يكتب عدة محركات دفعة واحدة ضمن قفل واحد — أسرع بكثير"""
-    _ensure_servos_on()
     right_writes = {}
     left_writes = {}
     for key, angle in updates.items():
@@ -1982,6 +1980,6 @@ if __name__ == "__main__":
     print(f"Hardware: {'CONNECTED' if HARDWARE else 'SIMULATION MODE'}")
     print(f"IMU (BNO085): {'READY' if BNO_READY else 'NOT FOUND'}")
     _startup_imu_zero()
+    apply_startup_calibration()  # ← المحركات تشتغل بالبداية زي ما كانت
     print("Spider Web Controller → http://0.0.0.0:5000")
-    print("⚡ المحركات نايمة — أول أمر حركة يفعّلها")
     app.run(host="0.0.0.0", port=5000, debug=False)
