@@ -528,6 +528,116 @@ def _run_forward_gait(params, speed=1.0, max_cycles=0, gait_type='forward'):
 
 
 # ════════════════════════════════════════════════════════════════
+# ── Lateral Gait Engine (Tibia-based true lateral movement) ──
+# ════════════════════════════════════════════════════════════════
+
+def _run_lateral_gait(params, speed=1.0, max_cycles=0, direction='left'):
+    """
+    حركة جانبية حقيقية باستخدام مفصل الـ Tibia.
+    المبدأ: أثناء الـ Stance، الأرجل اليمنى تمد الـ Tibia (تدفع الجسم يسار)
+    والأرجل اليسرى تطوي الـ Tibia (تسحب الجسم يسار). والعكس لليمين.
+    """
+    global gait_running, gait_step_count, gait_current_phase
+
+    SHIFT_DEG = 14
+    LIFT_DEG = 14
+    total = 8
+    half = total // 2
+
+    delay = 0.10 / speed
+    s_steps = max(3, int(6 / speed))
+    s_delay = max(0.01, 0.02 / speed)
+
+    sign = 1 if direction == 'left' else -1
+
+    grp_a = params["groups"]["A"]
+    legs_all = list(params["legs"].keys())
+    legs_order = list(params["legs"].keys())
+
+    def _servo_keys(leg_name):
+        leg = params["legs"][leg_name]
+        side = leg["side"]
+        leg_idx = legs_order.index(leg_name)
+        if side == "R":
+            ch = leg_idx * 3
+        else:
+            ch = (leg_idx - 3) * 3
+        return f"{side}{ch}", f"{side}{ch+1}", f"{side}{ch+2}"
+
+    frame = 0
+    cycles = 0
+
+    while gait_event.is_set():
+        if max_cycles > 0 and cycles >= max_cycles:
+            break
+
+        all_targets = {}
+
+        for leg_name in legs_all:
+            leg = params["legs"][leg_name]
+            side = leg["side"]
+            c_key, f_key, t_key = _servo_keys(leg_name)
+
+            offset = 0 if leg_name in grp_a else half
+            f = (frame + offset) % total
+
+            lat_dir = (1 if side == 'R' else -1) * sign
+
+            if f < half:
+                progress = f / half
+                coxa = leg["coxa_stand"]
+                femur = leg["femur_stand"] + LIFT_DEG * math.sin(progress * math.pi)
+                tibia = leg["tibia"] + lat_dir * (SHIFT_DEG - 2 * SHIFT_DEG * progress)
+            else:
+                progress = (f - half) / half
+                coxa = leg["coxa_stand"]
+                femur = leg["femur_stand"]
+                tibia = leg["tibia"] + lat_dir * (-SHIFT_DEG + 2 * SHIFT_DEG * progress)
+
+            all_targets[c_key] = max(45, min(135, round(coxa)))
+            all_targets[f_key] = max(45, min(135, round(femur)))
+            all_targets[t_key] = max(45, min(135, round(tibia)))
+
+        if balance.enabled:
+            for leg_name in legs_all:
+                leg = params["legs"][leg_name]
+                side = leg["side"]
+                _, f_key, _ = _servo_keys(leg_name)
+                offset = 0 if leg_name in grp_a else half
+                f_leg = (frame + offset) % total
+                is_swing = f_leg < half
+                if not is_swing and f_key in all_targets:
+                    correction = balance.femur_offsets.get(leg_name, 0.0)
+                    all_targets[f_key] = max(45, min(135, round(all_targets[f_key] + correction)))
+
+        gait_current_phase = f"lateral-{frame}"
+        smooth_move_leg(list(all_targets.keys()), all_targets, steps=s_steps, delay=s_delay)
+
+        frame += 1
+        if frame >= total:
+            frame = 0
+            cycles += 1
+            gait_step_count += 1
+
+        remaining = delay - s_steps * s_delay
+        time.sleep(max(0, remaining))
+
+    gait_current_phase = "returning"
+    stance_targets = {}
+    for leg_name in legs_all:
+        leg = params["legs"][leg_name]
+        c_key, f_key, t_key = _servo_keys(leg_name)
+        stance_targets[c_key] = leg["coxa_stand"]
+        stance_targets[f_key] = leg["femur_stand"]
+        stance_targets[t_key] = leg["tibia"]
+
+    smooth_move_leg(list(stance_targets.keys()), stance_targets, steps=12, delay=0.03)
+    gait_current_phase = "idle"
+    gait_running = False
+    gait_event.clear()
+
+
+# ════════════════════════════════════════════════════════════════
 # ── Balance System (Gimbal Balance + PID) ──
 # ════════════════════════════════════════════════════════════════
 
@@ -1431,11 +1541,20 @@ def ripple_gait_start():
     gait_step_count = 0
     gait_current_phase = "ripple_starting"
 
-    gait_thread = threading.Thread(
-        target=_run_ripple_gait,
-        args=(params, speed, max_cycles, direction),
-        daemon=True
-    )
+    if direction in ('strafe_left', 'strafe_right'):
+        lat_dir = 'left' if direction == 'strafe_left' else 'right'
+        tripod_params = _load_gait_params("forward_tripod")
+        gait_thread = threading.Thread(
+            target=_run_lateral_gait,
+            args=(tripod_params or params, speed, max_cycles, lat_dir),
+            daemon=True
+        )
+    else:
+        gait_thread = threading.Thread(
+            target=_run_ripple_gait,
+            args=(params, speed, max_cycles, direction),
+            daemon=True
+        )
     gait_thread.start()
     return jsonify({"ok": True, "status": "ripple started", "speed": speed, "direction": direction})
 
@@ -1481,11 +1600,24 @@ def gait_forward_start():
     gait_step_count = 0
     gait_current_phase = "starting"
 
-    gait_thread = threading.Thread(
-        target=_run_forward_gait,
-        args=(params, speed, max_cycles, gait_type),
-        daemon=True
-    )
+    lateral_types = {
+        'shift_left': 'left', 'shift_right': 'right',
+        'strafe_left': 'left', 'strafe_right': 'right',
+        'crab_walk': 'left',
+    }
+
+    if gait_type in lateral_types:
+        gait_thread = threading.Thread(
+            target=_run_lateral_gait,
+            args=(params, speed, max_cycles, lateral_types[gait_type]),
+            daemon=True
+        )
+    else:
+        gait_thread = threading.Thread(
+            target=_run_forward_gait,
+            args=(params, speed, max_cycles, gait_type),
+            daemon=True
+        )
     gait_thread.start()
     return jsonify({"ok": True, "status": "forward started", "speed": speed, "type": gait_type})
 
@@ -1526,11 +1658,25 @@ def gait_once():
 
     gait_running = True
     gait_event.set()
-    gait_thread  = threading.Thread(
-        target=_run_forward_gait,
-        args=(params, speed, cycles, gait_type),
-        daemon=True
-    )
+
+    lateral_types = {
+        'shift_left': 'left', 'shift_right': 'right',
+        'strafe_left': 'left', 'strafe_right': 'right',
+        'crab_walk': 'left',
+    }
+
+    if gait_type in lateral_types:
+        gait_thread = threading.Thread(
+            target=_run_lateral_gait,
+            args=(params, speed, cycles, lateral_types[gait_type]),
+            daemon=True
+        )
+    else:
+        gait_thread = threading.Thread(
+            target=_run_forward_gait,
+            args=(params, speed, cycles, gait_type),
+            daemon=True
+        )
     gait_thread.start()
     return jsonify({'ok': True, 'type': gait_type, 'cycles': cycles})
 
@@ -2194,11 +2340,20 @@ def smooth_ripple_start():
     gait_step_count = 0
     gait_current_phase = "smooth_ripple_starting"
 
-    gait_thread = threading.Thread(
-        target=_run_smooth_ripple,
-        args=(params, speed, max_cycles, direction),
-        daemon=True
-    )
+    if direction in ('strafe_left', 'strafe_right'):
+        lat_dir = 'left' if direction == 'strafe_left' else 'right'
+        tripod_params = _load_gait_params("forward_tripod")
+        gait_thread = threading.Thread(
+            target=_run_lateral_gait,
+            args=(tripod_params or params, speed, max_cycles, lat_dir),
+            daemon=True
+        )
+    else:
+        gait_thread = threading.Thread(
+            target=_run_smooth_ripple,
+            args=(params, speed, max_cycles, direction),
+            daemon=True
+        )
     gait_thread.start()
     return jsonify({"ok": True, "status": "smooth ripple started", "speed": speed, "direction": direction})
 
