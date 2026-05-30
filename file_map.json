@@ -1,0 +1,13 @@
+{
+  "ملف التوازن": "ground_calibration_test.py",
+  "واجهة التحكم بالمحركات": "web_controller.py",
+  "قالب واجهة التحكم": "templates/index.html",
+  "تخزين الوضعيات": "positions.json",
+  "ملف ضبط التوازن مع الجايرسكوب": "stance_tune_bno.py",
+  "تخزين خطط المشي": "gait_params.json",
+  "مجلد Sonnet": "Sonnet/",
+  "وثيقة Ripple Gait": "Sonnet/ripple_gait.md",
+  "وثيقة التوازن والمشي السلس": "Sonnet/gimbal_balance_smooth_walking.md",
+  "إعدادات التوازن PID": "balance_config.json",
+  "بيانات Ripple Gait": "ripple_gait_params.json"
+}

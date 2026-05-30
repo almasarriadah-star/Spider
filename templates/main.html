@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0d0d0f">
+<title>🕷️ Spider Hexapod</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0d0d0f;color:#e0e0e0;font-family:'Segoe UI',Tahoma,sans-serif;padding:12px;min-height:100vh;display:flex;flex-direction:column;align-items:center}
+
+/* Logo */
+.hero{text-align:center;padding:30px 0 10px}
+.hero-icon{font-size:64px;margin-bottom:8px;animation:spider-bob 3s ease-in-out infinite}
+@keyframes spider-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+.hero h1{font-size:28px;font-weight:800;background:linear-gradient(135deg,#58a6ff,#3fb950);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero p{color:#555;font-size:13px;margin-top:4px}
+
+/* Status Pill */
+.status-pill{display:inline-flex;gap:16px;background:#131318;border:1px solid #222;border-radius:30px;padding:10px 24px;margin:16px 0 24px;font-size:12px}
+.status-pill .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-left:6px;vertical-align:middle}
+.dot-on{background:#3fb950;box-shadow:0 0 6px #3fb950}
+.dot-off{background:#f85149;box-shadow:0 0 6px #f85149}
+
+/* Cards Grid */
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:480px;padding:0 4px}
+.card{background:#131318;border:1px solid #222;border-radius:16px;padding:20px 16px;text-decoration:none;color:#e0e0e0;transition:all .15s;display:flex;flex-direction:column;align-items:center;text-align:center;cursor:pointer}
+.card:hover{border-color:#58a6ff;transform:translateY(-2px);box-shadow:0 8px 24px rgba(88,166,255,.08)}
+.card:active{transform:scale(.97)}
+.card-icon{font-size:40px;margin-bottom:10px}
+.card-title{font-size:15px;font-weight:700;margin-bottom:4px;color:#e0e0e0}
+.card-desc{font-size:11px;color:#555;line-height:1.5}
+
+/* Card accent colors */
+.card-gait{border-bottom:3px solid #3fb950}
+.card-gait:hover{border-color:#3fb950;box-shadow:0 8px 24px rgba(63,185,80,.1)}
+.card-control{border-bottom:3px solid #58a6ff}
+.card-control:hover{border-color:#58a6ff;box-shadow:0 8px 24px rgba(88,166,255,.1)}
+.card-imu{border-bottom:3px solid #d2a8ff}
+.card-imu:hover{border-color:#d2a8ff;box-shadow:0 8px 24px rgba(210,168,255,.1)}
+.card-off{border-bottom:3px solid #f85149}
+.card-off:hover{border-color:#f85149;box-shadow:0 8px 24px rgba(248,81,73,.1)}
+
+/* Full width card */
+.card-full{grid-column:1/-1}
+
+/* Footer */
+.footer{margin-top:auto;padding:20px;text-align:center;color:#333;font-size:11px}
+
+/* Loading */
+.loading{display:flex;justify-content:center;align-items:center;min-height:200px}
+.spinner{width:32px;height:32px;border:3px solid #222;border-top-color:#58a6ff;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+@media(max-width:360px){
+  .cards{grid-template-columns:1fr}
+  .hero h1{font-size:22px}
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-icon">🕷️</div>
+  <h1>Spider Hexapod</h1>
+  <p>نظام التحكم بالروبوت العنكبوت</p>
+</div>
+
+<div class="status-pill">
+  <span>📹 الهاردوير <span class="dot" id="hwDot"></span></span>
+  <span>🧭 IMU <span class="dot" id="imuDot"></span></span>
+  <span id="gaitPill">⬛️ واقف</span>
+</div>
+
+<div class="cards">
+  <a href="/gait" class="card card-gait">
+    <div class="card-icon">🎮</div>
+    <div class="card-title">لوحة الحركة</div>
+    <div class="card-desc">مشي أمام/خلف، دوران، انزياح، حركات استعراضية</div>
+  </a>
+
+  <a href="/sim" class="card card-control">
+    <div class="card-icon">🕷️</div>
+    <div class="card-title">محاكاة 3D</div>
+    <div class="card-desc">عارض WebGL حي للروبوت مع بيانات IMU</div>
+  </a>
+
+  <a href="/motors" class="card card-control">
+    <div class="card-icon">🎛️</div>
+    <div class="card-title">التحكم بالمحركات</div>
+    <div class="card-desc">تحكم يدوي بكل محرك، معايرة، حفظ الوضعيات</div>
+  </a>
+
+  <div class="card card-imu card-full" onclick="window.open('/#imu-section','_self')">
+    <div class="card-icon">🧭</div>
+    <div class="card-title">حساس الميلان</div>
+    <div class="card-desc">BNO085 — قراءة Roll / Pitch / Yaw بالوقت الحقيقي</div>
+  </div>
+
+  <div class="card card-off card-full" onclick="emergencyStop()">
+    <div class="card-icon">⛔</div>
+    <div class="card-title">إيقاف طارئ</div>
+    <div class="card-desc">إيقاف المشي + إطفاء المحركات فوراً</div>
+  </div>
+</div>
+
+<div class="footer">
+  🕷️ Spider Hexapod Controller — Raspberry Pi
+</div>
+
+<script>
+async function init(){
+  try{
+    const s=await(await fetch('/api/status')).json();
+    document.getElementById('hwDot').className='dot '+(s.hardware?'dot-on':'dot-off');
+    const imu=await(await fetch('/api/imu/status')).json();
+    document.getElementById('imuDot').className='dot '+(imu.ready?'dot-on':'dot-off');
+    const g=await(await fetch('/api/gait/forward/status')).json();
+    const el=document.getElementById('gaitPill');
+    el.textContent=g.running?'🟢 يمشي (#'+g.step_count+')':'⬛️ واقف';
+  }catch(e){
+    document.getElementById('hwDot').className='dot dot-off';
+    document.getElementById('imuDot').className='dot dot-off';
+  }
+}
+
+async function emergencyStop(){
+  await fetch('/api/gait/forward/stop',{method:'POST'});
+  await fetch('/api/off',{method:'POST'});
+  document.getElementById('gaitPill').textContent='🔴 إيقاف طارئ';
+}
+
+init();
+setInterval(async()=>{
+  try{
+    const g=await(await fetch('/api/gait/forward/status')).json();
+    document.getElementById('gaitPill').textContent=g.running?'🟢 يمشي (#'+g.step_count+')':'⬛️ واقف';
+  }catch(e){}
+},2000);
+</script>
+</body>
+</html>

@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d0d0f">
+<title>🕷️ لوحة حركة Spider</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0d0d0f;color:#e0e0e0;font-family:'Segoe UI',Tahoma,sans-serif;padding:8px;overflow-x:hidden}
+a{color:#58a6ff;text-decoration:none}
+
+/* Header */
+header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#131318;border-radius:14px;margin-bottom:10px;border:1px solid #222}
+.logo{font-size:18px;font-weight:800;color:#58a6ff}
+.logo span{color:#3fb950}
+.hw{font-size:11px;color:#666}
+nav a{background:#1a1a2e;color:#58a6ff;padding:7px 14px;border-radius:8px;font-size:12px;font-weight:700;border:1px solid #2a2a4a}
+
+/* Status bar */
+.status-bar{display:flex;justify-content:center;gap:16px;padding:8px;background:#131318;border-radius:10px;margin-bottom:10px;border:1px solid #222;font-size:12px;flex-wrap:wrap}
+.status-bar .on{color:#3fb950}
+.status-bar .off{color:#f85149}
+
+/* Cards */
+.card{background:#131318;border:1px solid #222;border-radius:14px;padding:14px;margin-bottom:10px}
+.card h2{color:#58a6ff;font-size:14px;margin-bottom:10px;text-align:center}
+
+/* Buttons */
+.btn{display:flex;align-items:center;justify-content:center;border:none;border-radius:10px;cursor:pointer;font-weight:700;transition:all .12s;min-height:44px;min-width:44px;-webkit-tap-highlight-color:transparent}
+.btn:active{transform:scale(.95)}
+.btn-green{background:#0a5c2e;color:#fff;border:1px solid #1a8a44}
+.btn-green:hover{background:#0d7a3a}
+.btn-red{background:#5c0a0a;color:#fff;border:1px solid #8a1a1a}
+.btn-red:hover{background:#7a0d0d}
+.btn-blue{background:#0a1a5c;color:#58a6ff;border:1px solid #1a3a8a}
+.btn-blue:hover{background:#0d2080}
+.btn-purple{background:#2a0a5c;color:#d2a8ff;border:1px solid #4a1a8a}
+.btn-purple:hover{background:#3a0d7a}
+.btn-orange{background:#5c3a0a;color:#f0883e;border:1px solid #8a5a1a}
+.btn-orange:hover{background:#7a4a0d}
+.btn-gray{background:#1a1a1a;color:#888;border:1px solid #333}
+.btn-gray:hover{background:#252525}
+
+/* Emergency stop */
+.btn-stop-big{background:#8a0000;color:#fff;padding:16px;font-size:18px;border-radius:14px;border:3px solid #ff0000;width:100%;margin-bottom:10px;animation:pulse-stop 2s infinite}
+@keyframes pulse-stop{0%,100%{box-shadow:0 0 0 0 rgba(255,0,0,.3)}50%{box-shadow:0 0 12px 6px rgba(255,0,0,.15)}}
+
+/* D-Pad */
+.dpad{display:grid;grid-template-columns:repeat(3,60px);grid-template-rows:repeat(3,60px);gap:6px;justify-content:center;margin:10px auto}
+.dpad .btn{width:60px;height:60px;font-size:22px;border-radius:12px}
+.dpad-center{background:#1a1a2e!important;color:#58a6ff!important;font-size:14px!important}
+
+/* Speed control */
+.speed-row{display:flex;gap:6px;justify-content:center;align-items:center;margin:8px 0;flex-wrap:wrap}
+.speed-row select{padding:8px 12px;border-radius:8px;background:#1a1a1a;color:#e0e0e0;border:1px solid #333;font-size:13px}
+
+/* Movement grids */
+.move-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.move-grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+.move-grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+
+/* Gait status */
+#gait-status{color:#666;font-size:13px;min-width:180px;text-align:center}
+
+/* IMU */
+.imu-row{display:flex;justify-content:center;gap:20px;flex-wrap:wrap}
+.imu-val{text-align:center}
+.imu-val .label{font-size:11px;color:#666}
+.imu-val .num{font-size:22px;font-weight:700}
+.imu-val .num.roll{color:#3fb950}
+.imu-val .num.pitch{color:#58a6ff}
+.imu-val .num.yaw{color:#d2a8ff}
+
+/* Sections */
+.section-title{color:#888;font-size:12px;text-align:center;margin:12px 0 6px;text-transform:uppercase;letter-spacing:1px}
+
+/* Mobile */
+@media(max-width:480px){
+  .dpad{grid-template-columns:repeat(3,70px);grid-template-rows:repeat(3,70px)}
+  .dpad .btn{width:70px;height:70px;font-size:26px}
+  .move-grid,.move-grid-2{grid-template-columns:repeat(2,1fr)}
+  .move-grid-4{grid-template-columns:repeat(2,1fr)}
+  .btn-stop-big{padding:20px;font-size:20px}
+  .imu-val .num{font-size:26px}
+  header{padding:10px 12px}
+  .logo{font-size:16px}
+  .status-bar span:not(#hw-label):not(#gait-status){display:none}
+}
+
+/* iOS zoom fix */
+input[type=range]{font-size:16px}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div>
+    <div class="logo">🕷️ Spider <span>Gait</span></div>
+    <div class="hw" id="hwStatus">جاري التحميل...</div>
+  </div>
+  <nav>
+    <a href="/">🏠 الرئيسية</a>
+  </nav>
+</header>
+
+<!-- Emergency Stop -->
+<button class="btn btn-stop-big" onclick="emergencyStop()">⛔ إيقاف طارئ</button>
+
+<!-- Status -->
+<div class="status-bar">
+  <span>📹 <span id="hw-label">—</span></span>
+  <span>🧭 IMU: <span id="imu-status">—</span></span>
+  <span id="gait-status">⬛️ واقف</span>
+</div>
+
+<!-- Speed -->
+<div class="card">
+  <h2>⚡ السرعة</h2>
+  <div class="speed-row">
+    <select id="gait-speed">
+      <option value="0.3">🐌 0.3×</option>
+      <option value="0.5">🐢 0.5×</option>
+      <option value="0.8">🚶 0.8×</option>
+      <option value="1.0" selected>💨 1.0×</option>
+      <option value="1.5">🏃 1.5×</option>
+      <option value="2.0">⚡ 2.0×</option>
+    </select>
+  </div>
+</div>
+
+<!-- D-Pad -->
+<div class="card">
+  <h2>🎮 الاتجاهات</h2>
+  <div class="dpad">
+    <div></div>
+    <button class="btn btn-green" onclick="startGait('forward')">▲</button>
+    <div></div>
+    <button class="btn btn-blue" onclick="startGait('turn_left')">↺</button>
+    <button class="btn btn-gray dpad-center" onclick="stopGait()">⏹</button>
+    <button class="btn btn-blue" onclick="startGait('turn_right')">↻</button>
+    <div></div>
+    <button class="btn btn-green" onclick="startGait('backward')">▼</button>
+    <div></div>
+  </div>
+  <div class="section-title">جانبي</div>
+  <div class="speed-row">
+    <button class="btn btn-purple" onclick="startGait('shift_left')" style="padding:8px 18px">◀ انزياح يسار</button>
+    <button class="btn btn-purple" onclick="startGait('shift_right')" style="padding:8px 18px">انزياح يمين ▶</button>
+  </div>
+  <div class="speed-row">
+    <button class="btn btn-purple" onclick="startGait('strafe_left')" style="padding:8px 14px">⬅ زحف يسار</button>
+    <button class="btn btn-purple" onclick="startGait('strafe_right')" style="padding:8px 14px">زحف يمين ➡</button>
+  </div>
+  <div class="speed-row">
+    <button class="btn btn-orange" onclick="startGait('crab_walk')" style="padding:8px 14px">🦀 مشية سرطان</button>
+    <button class="btn btn-orange" onclick="startGait('climb')" style="padding:8px 14px">🧗 تسلق</button>
+    <button class="btn btn-orange" onclick="startGait('creep')" style="padding:8px 14px">🐛 زحف</button>
+  </div>
+</div>
+
+<!-- Rotation -->
+<div class="card">
+  <h2>🔄 دوران محدد</h2>
+  <div class="move-grid-4">
+    <button class="btn btn-blue" onclick="gaitOnce('turn_left',3)">↺ 90°</button>
+    <button class="btn btn-blue" onclick="gaitOnce('turn_left',6)">↺ 180°</button>
+    <button class="btn btn-blue" onclick="gaitOnce('turn_right',3)">↻ 90°</button>
+    <button class="btn btn-blue" onclick="gaitOnce('turn_right',6)">↻ 180°</button>
+  </div>
+</div>
+
+<!-- Body -->
+<div class="card">
+  <h2>🦿 حركات الجسم</h2>
+  <div class="move-grid">
+    <button class="btn btn-green" onclick="bodyMove('body_up')">⬆ ارتفاع</button>
+    <button class="btn btn-red" onclick="bodyMove('body_down')">⬇ انخفاض</button>
+    <button class="btn btn-gray" onclick="bodyMove('stand')">⬜ وقوف</button>
+    <button class="btn btn-blue" onclick="bodyMove('lean_forward')">⬅ ميل أمام</button>
+    <button class="btn btn-blue" onclick="bodyMove('lean_back')">➡ ميل خلف</button>
+    <button class="btn btn-blue" onclick="bodyMove('lean_left')">↙ ميل يسار</button>
+    <button class="btn btn-blue" onclick="bodyMove('lean_right')">↘ ميل يمين</button>
+    <button class="btn btn-purple" onclick="bodyMove('twist_left')">↺ لي يسار</button>
+    <button class="btn btn-purple" onclick="bodyMove('twist_right')">↻ لي يمين</button>
+  </div>
+</div>
+
+<!-- Special Moves -->
+<div class="card">
+  <h2>🎭 حركات استعراضية</h2>
+  <div class="move-grid-2">
+    <button class="btn btn-green" onclick="specialMove('wake_up')">✅ إيقاظ</button>
+    <button class="btn btn-gray" onclick="specialMove('sleep_pose')">💤 نوم</button>
+    <button class="btn btn-blue" onclick="specialMove('wave')">👋 تلويح</button>
+    <button class="btn btn-blue" onclick="specialMove('shake')">🤝 مصافحة</button>
+    <button class="btn btn-purple" onclick="specialMove('salute')">🫡 تحية</button>
+    <button class="btn btn-purple" onclick="specialMove('bow')">🙇 انحناء</button>
+    <button class="btn btn-orange" onclick="specialMove('dance')">💃 رقص</button>
+    <button class="btn btn-orange" onclick="specialMove('roar')">💥 تهديد</button>
+    <button class="btn btn-orange" onclick="specialMove('stretch')">🦾 تمدد</button>
+    <button class="btn btn-orange" onclick="specialMove('spin')">🌀 دوران</button>
+    <button class="btn btn-blue" onclick="specialMove('idle_sway')">🌊 تأرجح</button>
+  </div>
+</div>
+
+<!-- Motors Off -->
+<div style="margin-bottom:10px">
+  <button class="btn btn-red" onclick="motorsOff()" style="width:100%;padding:14px;font-size:16px">🔴 إطفاء المحركات</button>
+</div>
+
+<!-- ═══ Balance (التوازن) ═══ -->
+<div class="card">
+  <h2>⚖️ التوازن التلقائي</h2>
+  <div class="speed-row" style="margin-bottom:8px">
+    <button class="btn btn-green" id="btnBalStart" onclick="balanceStart()" style="padding:8px 16px">▶ تشغيل</button>
+    <button class="btn btn-red" id="btnBalStop" onclick="balanceStop()" style="padding:8px 16px;display:none">⏹ إيقاف</button>
+    <button class="btn btn-blue" onclick="zeroIMU()" style="padding:8px 16px">🎯 تصفير IMU</button>
+  </div>
+  <div id="balStatus" style="display:none">
+    <div class="imu-row" style="margin-bottom:8px">
+      <div class="imu-val"><div class="label">Roll</div><div class="num roll" id="balRoll">0.0°</div></div>
+      <div class="imu-val"><div class="label">Pitch</div><div class="num pitch" id="balPitch">0.0°</div></div>
+      <div class="imu-val"><div class="label">تصحيح R</div><div class="num" style="color:#f0883e" id="balCorrR">0.0°</div></div>
+      <div class="imu-val"><div class="label">تصحيح P</div><div class="num" style="color:#f0883e" id="balCorrP">0.0°</div></div>
+    </div>
+    <div class="section-title">ضبط PID</div>
+    <div class="speed-row">
+      <span style="font-size:11px;color:#888">KP</span>
+      <button class="btn btn-gray" onclick="balTune('kp',-0.1)" style="padding:4px 10px;font-size:14px">−</button>
+      <span id="balKP" style="font-size:14px;font-weight:700;min-width:36px;text-align:center">0.8</span>
+      <button class="btn btn-gray" onclick="balTune('kp',+0.1)" style="padding:4px 10px;font-size:14px">+</button>
+      <span style="font-size:11px;color:#888;margin-left:8px">KD</span>
+      <button class="btn btn-gray" onclick="balTune('kd',-0.1)" style="padding:4px 10px;font-size:14px">−</button>
+      <span id="balKD" style="font-size:14px;font-weight:700;min-width:36px;text-align:center">0.3</span>
+      <button class="btn btn-gray" onclick="balTune('kd',+0.1)" style="padding:4px 10px;font-size:14px">+</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Smooth Ripple (مشي سلس) ═══ -->
+<div class="card">
+  <h2>🕸️ المشي السلس (Smooth Ripple)</h2>
+  <div class="dpad">
+    <div></div>
+    <button class="btn btn-green" onclick="startSmoothRipple('forward')">▲</button>
+    <div></div>
+    <button class="btn btn-blue" onclick="startSmoothRipple('turn_left')">↺</button>
+    <button class="btn btn-gray dpad-center" onclick="stopSmoothRipple()">⏹</button>
+    <button class="btn btn-blue" onclick="startSmoothRipple('turn_right')">↻</button>
+    <div></div>
+    <button class="btn btn-green" onclick="startSmoothRipple('backward')">▼</button>
+    <div></div>
+  </div>
+  <div class="speed-row">
+    <button class="btn btn-purple" onclick="startSmoothRipple('strafe_left')" style="padding:8px 14px">⬅ يسار</button>
+    <button class="btn btn-purple" onclick="startSmoothRipple('strafe_right')" style="padding:8px 14px">يمين ➡</button>
+  </div>
+  <div id="smoothStatus" style="text-align:center;font-size:12px;color:#666;margin-top:6px">⬛️ واقف</div>
+</div>
+
+<!-- ═══ Easing (نعومة الحركة) ═══ -->
+<div class="card">
+  <h2>🎛️ نمط النعومة</h2>
+  <div class="move-grid" style="grid-template-columns:repeat(3,1fr)">
+    <button class="btn btn-gray" id="easeLinear" onclick="setEase('linear')">خطي</button>
+    <button class="btn btn-green" id="easeSmooth" onclick="setEase('smoothstep')">نعم</button>
+    <button class="btn btn-gray" id="easeCosine" onclick="setEase('cosine')">Cosine</button>
+  </div>
+  <div style="text-align:center;font-size:11px;color:#666;margin-top:6px" id="easeLabel">● smoothstep</div>
+</div>
+
+<!-- IMU -->
+<div class="card">
+  <h2>🧭 حساس الميلان</h2>
+  <div class="speed-row" style="margin-bottom:10px">
+    <button class="btn btn-green" id="btnImuStart" onclick="startIMU()" style="padding:8px 18px">▶ تشغيل</button>
+    <button class="btn btn-red" id="btnImuStop" onclick="stopIMU()" style="padding:8px 18px;display:none">⏹ إيقاف</button>
+    <button class="btn btn-blue" onclick="zeroIMU()" style="padding:8px 18px">🎯 تصفير</button>
+  </div>
+  <div class="imu-row" id="imuRow" style="display:none">
+    <div class="imu-val"><div class="label">Roll</div><div class="num roll" id="imuRoll">0.00°</div></div>
+    <div class="imu-val"><div class="label">Pitch</div><div class="num pitch" id="imuPitch">0.00°</div></div>
+    <div class="imu-val"><div class="label">Yaw</div><div class="num yaw" id="imuYaw">0.00°</div></div>
+  </div>
+
+  <!-- 3D Cube -->
+  <div id="imu3dWrap" style="display:none;perspective:400px;width:160px;height:160px;margin:16px auto">
+    <div id="imuCube" style="width:160px;height:160px;position:relative;transform-style:preserve-3d;transition:transform .15s ease-out">
+      <div style="position:absolute;width:160px;height:160px;background:rgba(63,185,80,.15);border:2px solid #3fb950;transform:translateZ(80px)"></div>
+      <div style="position:absolute;width:160px;height:160px;background:rgba(63,185,80,.15);border:2px solid #3fb950;transform:rotateY(180deg) translateZ(80px)"></div>
+      <div style="position:absolute;width:160px;height:160px;background:rgba(88,166,255,.15);border:2px solid #58a6ff;transform:rotateY(90deg) translateZ(80px)"></div>
+      <div style="position:absolute;width:160px;height:160px;background:rgba(88,166,255,.15);border:2px solid #58a6ff;transform:rotateY(-90deg) translateZ(80px)"></div>
+      <div style="position:absolute;width:160px;height:160px;background:rgba(210,168,255,.15);border:2px solid #d2a8ff;transform:rotateX(90deg) translateZ(80px)"></div>
+      <div style="position:absolute;width:160px;height:160px;background:rgba(210,168,255,.15);border:2px solid #d2a8ff;transform:rotateX(-90deg) translateZ(80px)"></div>
+      <div style="position:absolute;width:160px;height:160px;transform:translateZ(81px);display:flex;align-items:center;justify-content:center;color:#3fb950;font-weight:700;font-size:14px">أمام</div>
+      <div style="position:absolute;width:160px;height:160px;transform:rotateY(180deg) translateZ(81px);display:flex;align-items:center;justify-content:center;color:#3fb950;font-weight:700;font-size:14px">خلف</div>
+      <div style="position:absolute;width:160px;height:160px;transform:rotateX(-90deg) translateZ(81px);display:flex;align-items:center;justify-content:center;color:#d2a8ff;font-weight:700;font-size:14px">أعلى</div>
+    </div>
+  </div>
+
+  <!-- Chart -->
+  <canvas id="imuChart" width="400" height="180" style="display:none;width:100%;max-width:450px;margin:10px auto;border-radius:8px;background:#0a0a0c"></canvas>
+</div>
+
+<!-- Spider 3D Simulator -->
+<div class="card">
+  <h2 onclick="toggleSim()" style="cursor:pointer">🕷️ محاكاة 3D <span id="sim-toggle" style="float:left">▼</span></h2>
+  <div id="sim-panel" style="height:0;overflow:hidden;transition:height 0.4s ease">
+    <iframe id="spider-sim-frame" src="/sim" style="width:100%;height:380px;border:none;border-radius:12px;background:#080c10;display:block"></iframe>
+  </div>
+</div>
+
+<script>
+// ── Helpers ──
+async function api(url, data) {
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: data ? JSON.stringify(data) : undefined
+    });
+    return await r.json();
+  } catch(e) { return {ok: false, error: e.message}; }
+}
+
+function getSpeed() { return parseFloat(document.getElementById('gait-speed').value); }
+
+// ── Init ──
+async function init() {
+  try {
+    const s = await (await fetch('/api/status')).json();
+    document.getElementById('hw-label').innerHTML = s.hardware
+      ? '<span class="on">🟢 متصل</span>'
+      : '<span class="off">🔴 محاكاة</span>';
+
+    const imu = await (await fetch('/api/imu/status')).json();
+    document.getElementById('imu-status').textContent = imu.ready ? '🟢 جاهز' : '🔴 غير متصل';
+  } catch(e) {}
+}
+
+// ── Emergency Stop ──
+async function emergencyStop() {
+  await fetch('/api/gait/forward/stop', {method:'POST'});
+  await fetch('/api/gait/smooth-ripple/stop', {method:'POST'});
+  await fetch('/api/balance/stop', {method:'POST'});
+  await fetch('/api/calibrate', {method:'POST'});
+  document.getElementById('gait-status').textContent = '🔴 إيقاف طارئ';
+  document.getElementById('smoothStatus').textContent = '🔴 إيقاف طارئ';
+  document.getElementById('btnBalStart').style.display = '';
+  document.getElementById('btnBalStop').style.display = 'none';
+  if (_gaitPoll) { clearInterval(_gaitPoll); _gaitPoll = null; }
+  if (smoothPoll) { clearInterval(smoothPoll); smoothPoll = null; }
+  if (balPoll) { clearInterval(balPoll); balPoll = null; }
+}
+
+// ── Motors Off ──
+async function motorsOff() {
+  await fetch('/api/gait/forward/stop', {method:'POST'});
+  await fetch('/api/gait/smooth-ripple/stop', {method:'POST'});
+  await fetch('/api/balance/stop', {method:'POST'});
+  await fetch('/api/off', {method:'POST'});
+  document.getElementById('gait-status').textContent = '🔴 المحركات مطفأة';
+  document.getElementById('smoothStatus').textContent = '🔴 المحركات مطفأة';
+  document.getElementById('btnBalStart').style.display = '';
+  document.getElementById('btnBalStop').style.display = 'none';
+  if (_gaitPoll) { clearInterval(_gaitPoll); _gaitPoll = null; }
+  if (smoothPoll) { clearInterval(smoothPoll); smoothPoll = null; }
+  if (balPoll) { clearInterval(balPoll); balPoll = null; }
+}
+
+// ── Gait Start/Stop ──
+let _gaitPoll = null;
+
+async function startGait(type) {
+  const speed = getSpeed();
+  const r = await api('/api/gait/forward/start', {type: type, speed: speed, cycles: 0});
+  if (r.ok) {
+    document.getElementById('gait-status').textContent = '🟢 ' + type + '...';
+    if (!_gaitPoll) _gaitPoll = setInterval(pollStatus, 600);
+  } else {
+    document.getElementById('gait-status').textContent = '🔴 ' + (r.error || 'خطأ');
+  }
+}
+
+async function stopGait() {
+  await fetch('/api/gait/forward/stop', {method:'POST'});
+  document.getElementById('gait-status').textContent = '🟡 يوقف...';
+}
+
+async function gaitOnce(type, cycles) {
+  const speed = getSpeed();
+  const r = await api('/api/gait/once', {type: type, speed: speed, cycles: cycles});
+  if (r.ok) {
+    document.getElementById('gait-status').textContent = '🟢 ' + type + ' ×' + cycles;
+    if (!_gaitPoll) _gaitPoll = setInterval(pollStatus, 600);
+  } else {
+    document.getElementById('gait-status').textContent = '🔴 ' + (r.error || 'خطأ');
+  }
+}
+
+async function pollStatus() {
+  try {
+    const r = await fetch('/api/gait/forward/status');
+    const d = await r.json();
+    const el = document.getElementById('gait-status');
+    if (d.running) {
+      el.textContent = '🟢 ' + d.current_phase + ' | #' + d.step_count;
+    } else {
+      el.textContent = '⬛️ واقف';
+      if (_gaitPoll) { clearInterval(_gaitPoll); _gaitPoll = null; }
+    }
+  } catch(e) {}
+}
+
+// ── Body Move ──
+async function bodyMove(move) {
+  const r = await api('/api/body/move', {move: move, speed: getSpeed()});
+  if (!r.ok) document.getElementById('gait-status').textContent = '🔴 ' + (r.error || '');
+}
+
+// ── Special Move ──
+async function specialMove(name) {
+  const r = await api('/api/special/' + name, {speed: getSpeed()});
+  if (!r.ok) document.getElementById('gait-status').textContent = '🔴 ' + (r.error || '');
+}
+
+// ── IMU ──
+let imuRunning = false, imuInterval = null;
+const IMU_HIST = 80;
+const imuHist = {roll:[], pitch:[], yaw:[]};
+
+async function startIMU() {
+  const d = await (await fetch('/api/imu/status')).json();
+  if (!d.ready) { alert('حساس BNO085 غير متصل!'); return; }
+  imuRunning = true;
+  document.getElementById('btnImuStart').style.display = 'none';
+  document.getElementById('btnImuStop').style.display = '';
+  document.getElementById('imuRow').style.display = '';
+  document.getElementById('imu3dWrap').style.display = '';
+  document.getElementById('imuChart').style.display = '';
+  imuHist.roll = []; imuHist.pitch = []; imuHist.yaw = [];
+  pollIMU();
+}
+
+function stopIMU() {
+  imuRunning = false;
+  if (imuInterval) { clearTimeout(imuInterval); imuInterval = null; }
+  document.getElementById('btnImuStart').style.display = '';
+  document.getElementById('btnImuStop').style.display = 'none';
+}
+
+async function pollIMU() {
+  if (!imuRunning) return;
+  try {
+    const d = await (await fetch('/api/imu/read')).json();
+    if (d.ok) {
+      const roll = d.roll, pitch = d.pitch, yaw = d.yaw;
+      document.getElementById('imuRoll').textContent = roll.toFixed(2) + '°';
+      document.getElementById('imuPitch').textContent = pitch.toFixed(2) + '°';
+      document.getElementById('imuYaw').textContent = yaw.toFixed(2) + '°';
+
+      // 3D Cube rotation
+      document.getElementById('imuCube').style.transform =
+        `rotateX(${-pitch}deg) rotateY(${yaw}deg) rotateZ(${roll}deg)`;
+
+      // History
+      imuHist.roll.push(roll); imuHist.pitch.push(pitch); imuHist.yaw.push(yaw);
+      if (imuHist.roll.length > IMU_HIST) { imuHist.roll.shift(); imuHist.pitch.shift(); imuHist.yaw.shift(); }
+
+      // Draw chart
+      drawImuChart();
+    }
+  } catch(e) {}
+  if (imuRunning) imuInterval = setTimeout(pollIMU, 200);
+}
+
+async function zeroIMU() {
+  const r = await api('/api/imu/zero');
+  if (r.ok) alert('تم التصفير!');
+  else alert('فشل: ' + (r.error||''));
+}
+
+function drawImuChart() {
+  const canvas = document.getElementById('imuChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = '#1a1a2a';
+  ctx.lineWidth = 1;
+  const midY = H / 2;
+  for (let y = 0; y < H; y += 30) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  ctx.strokeStyle = '#2a2a3a';
+  ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(W, midY); ctx.stroke();
+
+  // Labels
+  ctx.font = '10px monospace';
+  ctx.fillStyle = '#444';
+  ctx.fillText('+90°', 2, 14);
+  ctx.fillText(' 0°', 2, midY - 4);
+  ctx.fillText('-90°', 2, H - 6);
+
+  const datasets = [
+    {data: imuHist.roll,  color: '#3fb950', label: 'Roll'},
+    {data: imuHist.pitch, color: '#58a6ff', label: 'Pitch'},
+    {data: imuHist.yaw,   color: '#d2a8ff', label: 'Yaw'},
+  ];
+
+  for (const ds of datasets) {
+    if (ds.data.length < 2) continue;
+    ctx.strokeStyle = ds.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < ds.data.length; i++) {
+      const x = (i / (IMU_HIST - 1)) * W;
+      const y = midY - (ds.data[i] / 90) * midY;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // Legend
+  ctx.font = 'bold 11px sans-serif';
+  const legends = [['Roll', '#3fb950'], ['Pitch', '#58a6ff'], ['Yaw', '#d2a8ff']];
+  let lx = W - 10;
+  for (let i = legends.length - 1; i >= 0; i--) {
+    ctx.fillStyle = legends[i][1];
+    const tw = ctx.measureText(legends[i][0]).width;
+    lx -= tw + 4;
+    ctx.fillText(legends[i][0], lx, 14);
+    lx -= 14;
+    ctx.fillStyle = legends[i][1];
+    ctx.fillRect(lx, 6, 10, 3);
+    lx -= 8;
+  }
+}
+
+// ── Touch improvements ──
+document.querySelectorAll('.btn').forEach(btn => {
+  btn.addEventListener('touchstart', () => {}, {passive: true});
+});
+document.addEventListener('touchmove', e => {
+  if (e.target.closest('.dpad')) e.preventDefault();
+}, {passive: false});
+
+// ── Simulator toggle ──
+let simOpen = false;
+function toggleSim() {
+  simOpen = !simOpen;
+  document.getElementById('sim-panel').style.height = simOpen ? '400px' : '0';
+  document.getElementById('sim-toggle').textContent = simOpen ? '▲' : '▼';
+}
+
+// ── Notify simulator iframe of mode changes ──
+function notifySimulator(mode) {
+  const frame = document.getElementById('spider-sim-frame');
+  if (frame && frame.contentWindow) {
+    frame.contentWindow.postMessage({type: 'mode', mode: mode}, '*');
+  }
+}
+
+// ── Patch startGait/stopGait to notify sim ──
+const _origStartGait = startGait;
+startGait = async function(type) {
+  await _origStartGait(type);
+  notifySimulator(type);
+};
+const _origStopGait = stopGait;
+stopGait = async function() {
+  await _origStopGait();
+  notifySimulator('stand');
+};
+
+// ── Start ──
+init();
+
+// ═══ Balance (التوازن) ═══
+let balPoll = null;
+async function balanceStart() {
+  const r = await api('/api/balance/start', {kp: 0.8, ki: 0, kd: 0.3});
+  if (r.status === 'started' || r.enabled) {
+    document.getElementById('btnBalStart').style.display = 'none';
+    document.getElementById('btnBalStop').style.display = '';
+    document.getElementById('balStatus').style.display = '';
+    if (!balPoll) balPoll = setInterval(pollBalance, 300);
+  } else {
+    alert('خطأ: ' + (r.error || JSON.stringify(r)));
+  }
+}
+
+async function balanceStop() {
+  await api('/api/balance/stop');
+  document.getElementById('btnBalStart').style.display = '';
+  document.getElementById('btnBalStop').style.display = 'none';
+  if (balPoll) { clearInterval(balPoll); balPoll = null; }
+}
+
+async function pollBalance() {
+  try {
+    const r = await (await fetch('/api/balance/status')).json();
+    document.getElementById('balRoll').textContent = r.roll.toFixed(1) + '°';
+    document.getElementById('balPitch').textContent = r.pitch.toFixed(1) + '°';
+    document.getElementById('balCorrR').textContent = r.roll_correction.toFixed(1) + '°';
+    document.getElementById('balCorrP').textContent = r.pitch_correction.toFixed(1) + '°';
+    document.getElementById('balKP').textContent = r.pid_roll.kp.toFixed(1);
+    document.getElementById('balKD').textContent = r.pid_roll.kd.toFixed(1);
+  } catch(e) {}
+}
+
+async function balTune(param, delta) {
+  const el = param === 'kp' ? document.getElementById('balKP') : document.getElementById('balKD');
+  const val = parseFloat(el.textContent) + delta;
+  const rounded = Math.round(val * 10) / 10;
+  await api('/api/balance/tune', {[param]: rounded});
+  el.textContent = rounded.toFixed(1);
+}
+
+// ═══ Smooth Ripple ═══
+let smoothPoll = null;
+async function startSmoothRipple(dir) {
+  const speed = getSpeed();
+  const r = await api('/api/gait/smooth-ripple/start', {speed: speed, cycles: 0, direction: dir});
+  if (r.ok) {
+    document.getElementById('smoothStatus').textContent = '🟢 ' + dir + '...';
+    if (!smoothPoll) smoothPoll = setInterval(pollSmooth, 600);
+  } else {
+    document.getElementById('smoothStatus').textContent = '🔴 ' + (r.error || 'خطأ');
+  }
+}
+
+async function stopSmoothRipple() {
+  await fetch('/api/gait/smooth-ripple/stop', {method:'POST'});
+  document.getElementById('smoothStatus').textContent = '🟡 يوقف...';
+}
+
+async function pollSmooth() {
+  try {
+    const r = await (await fetch('/api/gait/ripple/status')).json();
+    const el = document.getElementById('smoothStatus');
+    if (r.running) {
+      el.textContent = '🟢 smooth | #' + r.step_count;
+    } else {
+      el.textContent = '⬛️ واقف';
+      if (smoothPoll) { clearInterval(smoothPoll); smoothPoll = null; }
+    }
+  } catch(e) {}
+}
+
+// ═══ Easing ═══
+async function setEase(type) {
+  const r = await api('/api/easing/set', {type: type});
+  if (r.easing) {
+    document.getElementById('easeLabel').textContent = '● ' + r.easing;
+    ['Linear','Smooth','Cosine'].forEach(n => {
+      const btn = document.getElementById('ease' + n);
+      if (btn) { btn.className = 'btn ' + (n.toLowerCase().startsWith(r.easing.substring(0,3)) ? 'btn-green' : 'btn-gray'); }
+    });
+    // Fix: match correctly
+    document.getElementById('easeLinear').className = 'btn ' + (r.easing === 'linear' ? 'btn-green' : 'btn-gray');
+    document.getElementById('easeSmooth').className = 'btn ' + (r.easing === 'smoothstep' ? 'btn-green' : 'btn-gray');
+    document.getElementById('easeCosine').className = 'btn ' + (r.easing === 'cosine' ? 'btn-green' : 'btn-gray');
+  }
+}
+</script>
+</body>
+</html>

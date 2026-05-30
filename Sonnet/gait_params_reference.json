@@ -1,0 +1,20 @@
+{
+  "gait": "forward_tripod",
+  "total_frames": 8,
+  "frame_delay_ms": 100,
+  "coxa_amplitude": 22,
+  "smooth_steps": 6,
+  "smooth_delay": 0.02,
+  "groups": {
+    "A": ["RF", "LM", "RR"],
+    "B": ["LF", "RM", "LR"]
+  },
+  "legs": {
+    "RF": {"coxa_stand": 90, "femur_stand": 67, "tibia": 91,  "femur_lift": 119, "side": "R"},
+    "RM": {"coxa_stand": 92, "femur_stand": 57, "tibia": 92,  "femur_lift": 114, "side": "R"},
+    "RR": {"coxa_stand": 93, "femur_stand": 65, "tibia": 94,  "femur_lift": 121, "side": "R"},
+    "LF": {"coxa_stand": 90, "femur_stand": 54, "tibia": 77,  "femur_lift": 127, "side": "L"},
+    "LM": {"coxa_stand": 85, "femur_stand": 74, "tibia": 94,  "femur_lift": 132, "side": "L"},
+    "LR": {"coxa_stand": 94, "femur_stand": 64, "tibia": 89,  "femur_lift": 125, "side": "L"}
+  }
+}

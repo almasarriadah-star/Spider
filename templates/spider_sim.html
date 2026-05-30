@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<title>🕷️ Spider 3D</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#080c10;overflow:hidden;font-family:'Segoe UI',sans-serif;color:#ccc}
+canvas{display:block;width:100%;height:100%}
+#hud{position:absolute;top:0;left:0;right:0;padding:10px 14px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none}
+.hud-box{background:rgba(0,0,0,.6);border:1px solid #222;border-radius:10px;padding:8px 12px;font-size:12px;pointer-events:auto}
+.hud-box .label{color:#555;font-size:10px}
+.hud-box .val{font-size:18px;font-weight:700}
+.val-roll{color:#3fb950}.val-pitch{color:#58a6ff}.val-yaw{color:#d2a8ff}
+.mode-label{color:#f0883e;font-weight:700;font-size:13px;text-align:center;margin-top:4px}
+#mode-bar{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);display:flex;gap:6px;flex-wrap:wrap;justify-content:center;pointer-events:auto}
+.mbtn{background:rgba(20,20,30,.8);color:#aaa;border:1px solid #333;border-radius:8px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.mbtn:active{transform:scale(.93)}.mbtn.on{border-color:#3fb950;color:#3fb950}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div class="hud-box">
+    <div class="label">Roll</div><div class="val val-roll" id="vRoll">0.0°</div>
+    <div class="label">Pitch</div><div class="val val-pitch" id="vPitch">0.0°</div>
+    <div class="label">Yaw</div><div class="val val-yaw" id="vYaw">0.0°</div>
+  </div>
+  <div class="hud-box">
+    <div class="mode-label" id="modeLabel">⬜ STAND</div>
+  </div>
+</div>
+<div id="mode-bar">
+  <button class="mbtn" onclick="setMode('forward')">▲ أمام</button>
+  <button class="mbtn" onclick="setMode('backward')">▼ خلف</button>
+  <button class="mbtn" onclick="setMode('turn_left')">↺ يسار</button>
+  <button class="mbtn" onclick="setMode('turn_right')">↻ يمين</button>
+  <button class="mbtn on" onclick="setMode('stand')">⬜ وقوف</button>
+  <button class="mbtn" onclick="setMode('wave')">👋 تلويح</button>
+  <button class="mbtn" onclick="setMode('dance')">💃 رقص</button>
+</div>
+<script>
+// ── WebGL Init ──
+const canvas=document.getElementById('c'),gl=canvas.getContext('webgl',{antialias:true,alpha:false});
+function resize(){canvas.width=canvas.clientWidth*devicePixelRatio;canvas.height=canvas.clientHeight*devicePixelRatio;gl.viewport(0,0,canvas.width,canvas.height)}
+resize();window.addEventListener('resize',resize);
+
+// ── Shaders ──
+const VS=`
+attribute vec3 aPos,aNorm;
+uniform mat4 uMVP,uModel;
+varying vec3 vN,vW;
+void main(){
+  vec4 w=uModel*vec4(aPos,1.0);
+  vW=w.xyz;vN=mat3(uModel)*aNorm;
+  gl_Position=uMVP*vec4(aPos,1.0);
+}`;
+const FS=`
+precision mediump float;
+varying vec3 vN,vW;
+uniform vec3 uColor;
+void main(){
+  vec3 n=normalize(vN);
+  vec3 L1=normalize(vec3(1,2,3)),L2=normalize(vec3(-2,1,-1));
+  float d=max(dot(n,L1),0.0)*0.65+max(dot(n,L2),0.0)*0.25;
+  float a=0.25;
+  gl_FragColor=vec4(uColor*(a+d),1.0);
+}`;
+
+function mkShader(src,type){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);return s}
+const prog=gl.createProgram();
+gl.attachShader(prog,mkShader(VS,gl.VERTEX_SHADER));
+gl.attachShader(prog,mkShader(FS,gl.FRAGMENT_SHADER));
+gl.linkProgram(prog);gl.useProgram(prog);
+const aPos=gl.getAttribLocation(prog,'aPos'),aNorm=gl.getAttribLocation(prog,'aNorm');
+const uMVP=gl.getUniformLocation(prog,'uMVP'),uModel=gl.getUniformLocation(prog,'uModel'),uColor=gl.getUniformLocation(prog,'uColor');
+
+// ── Geometry: Capsule (cylinder + hemispheres) ──
+function mkCapsule(r,h,seg){
+  r=Math.max(0.001,r);h=Math.max(0.001,h);
+  const verts=[],norms=[],half=h/2;
+  const S=seg||10;
+  for(let i=0;i<S;i++){
+    const a1=i/S*Math.PI*2,a2=(i+1)/S*Math.PI*2;
+    const c1=Math.cos(a1),s1=Math.sin(a1),c2=Math.cos(a2),s2=Math.sin(a2);
+    // Cylinder
+    verts.push(r*c1,half,r*s1, r*c2,half,r*s2, r*c2,-half,r*s2);
+    norms.push(c1,0,s1, c2,0,s2, c2,0,s2);
+    verts.push(r*c1,half,r*s1, r*c2,-half,r*s2, r*c1,-half,r*s1);
+    norms.push(c1,0,s1, c2,0,s2, c1,0,s1);
+    // Top cap
+    verts.push(r*c1,half,r*s1, r*c2,half,r*s2, 0,half,0);
+    norms.push(c1,0,s1, c2,0,s2, 0,1,0);
+    // Bottom cap
+    verts.push(r*c1,-half,r*s1, 0,-half,0, r*c2,-half,r*s2);
+    norms.push(c1,0,-s1, 0,-1,0, c2,0,-s2);
+  }
+  return mkBuf(verts,norms);
+}
+function mkBuf(v,n){
+  const vb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,vb);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(v),gl.STATIC_DRAW);
+  const nb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,nb);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(n),gl.STATIC_DRAW);
+  return{vb,nb,cnt:v.length/3};
+}
+function draw(mesh,model,mvp,col){
+  gl.uniformMatrix4fv(uModel,false,model);gl.uniformMatrix4fv(uMVP,false,mvp);gl.uniform3fv(uColor,col);
+  gl.bindBuffer(gl.ARRAY_BUFFER,mesh.vb);gl.enableVertexAttribArray(aPos);gl.vertexAttribPointer(aPos,3,gl.FLOAT,false,0,0);
+  gl.bindBuffer(gl.ARRAY_BUFFER,mesh.nb);gl.enableVertexAttribArray(aNorm);gl.vertexAttribPointer(aNorm,3,gl.FLOAT,false,0,0);
+  gl.drawArrays(gl.TRIANGLES,0,mesh.cnt);
+}
+
+// Meshes
+const bodyMesh=mkCapsule(0.28,0.55,14);
+const coxaMesh=mkCapsule(0.07,0.35,8);
+const femurMesh=mkCapsule(0.07,0.30,8);
+const tibiaMesh=mkCapsule(0.06,0.28,8);
+const footMesh=mkCapsule(0.05,0.15,6);
+
+// ── Math ──
+function mat4(){return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1])}
+function mul(a,b){const r=mat4();for(let i=0;i<4;i++)for(let j=0;j<4;j++){r[j*4+i]=0;for(let k=0;k<4;k++)r[j*4+i]+=a[k*4+i]*b[j*4+k]}return r}
+function trans(x,y,z){const m=mat4();m[12]=x;m[13]=y;m[14]=z;return m}
+function rotX(a){const m=mat4(),c=Math.cos(a),s=Math.sin(a);m[5]=c;m[6]=s;m[9]=-s;m[10]=c;return m}
+function rotY(a){const m=mat4(),c=Math.cos(a),s=Math.sin(a);m[0]=c;m[2]=-s;m[8]=s;m[10]=c;return m}
+function rotZ(a){const m=mat4(),c=Math.cos(a),s=Math.sin(a);m[0]=c;m[1]=s;m[4]=-s;m[5]=c;return m}
+function scale(sx,sy,sz){const m=mat4();m[0]=sx;m[5]=sy;m[10]=sz;return m}
+function perspective(fov,asp,n,f){
+  const m=new Float32Array(16),t=1/Math.tan(fov/2);
+  m[0]=t/asp;m[5]=t;m[10]=(f+n)/(n-f);m[11]=-1;m[14]=2*f*n/(n-f);return m;
+}
+function lookAt(eye,ctr,up){
+  const z=normalize3(sub3(eye,ctr)),x=normalize3(cross3(up,z)),y=cross3(z,x);
+  const m=mat4();
+  m[0]=x[0];m[1]=y[0];m[2]=z[0];
+  m[4]=x[1];m[5]=y[1];m[6]=z[1];
+  m[8]=x[2];m[9]=y[2];m[10]=z[2];
+  m[12]=-dot3(x,eye);m[13]=-dot3(y,eye);m[14]=-dot3(z,eye);
+  return m;
+}
+function sub3(a,b){return[a[0]-b[0],a[1]-b[1],a[2]-b[2]]}
+function cross3(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]}
+function dot3(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]}
+function normalize3(v){const l=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])||1;return[v[0]/l,v[1]/l,v[2]/l]}
+function lerp(a,b,t){return a+(b-a)*t}
+function deg(d){return d*Math.PI/180}
+
+// ── Spider Config ──
+const LEG_NAMES=['RF','RM','RR','LF','LM','LR'];
+const LEG_ROOTS=[
+  [0.22,0.08,0.15],[-0.0,0.08,0.20],[-0.22,0.08,0.15],
+  [0.22,0.08,-0.15],[-0.0,0.08,-0.20],[-0.22,0.08,-0.15]
+];
+const LEG_DIRS=[1,1,1,-1,-1,-1]; // +1=right, -1=left
+const LEG_YAWS=[deg(35),deg(0),deg(-35),deg(-35),deg(0),deg(35)];
+const GROUP_A=[0,4,2]; // RF,LM,RR
+const GROUP_B=[1,3,5]; // RM,LF,LR
+const STAND_COXA=[0,0,0,0,0,0];
+const STAND_FEMUR=[-25,-25,-25,-25,-25,-25];
+const STAND_TIBIA=[50,50,50,50,50,50];
+
+// ── State ──
+let bodyRoll=0,bodyPitch=0,bodyYaw=0,bodyH=0.45;
+let gaitTime=0,currentMode='stand';
+let camAngle=0.3,camDist=2.2,camH=1.5;
+let legAngles=LEG_NAMES.map(()=>({coxa:0,femur:-25,tibia:50}));
+
+// ── Gait Engine ──
+function setMode(m){
+  currentMode=m;
+  document.getElementById('modeLabel').textContent=m==='stand'?'⬜ STAND':'▶ '+m.toUpperCase();
+  document.querySelectorAll('.mbtn').forEach(b=>{b.classList.toggle('on',b.textContent.includes({'forward':'أمام',backward:'خلف',turn_left:'يسار',turn_right:'يمين',stand:'وقوف',wave:'تلويح',dance:'رقص'}[m]||''))});
+}
+window.setMode=setMode;
+
+// postMessage receiver
+window.addEventListener('message',e=>{if(e.data?.type==='mode')setMode(e.data.mode)});
+
+function applyGait(dt){
+  gaitTime+=dt;
+  const t=gaitTime;
+  for(let i=0;i<6;i++){
+    const isA=GROUP_A.includes(i);
+    const phase=isA?t*3.5:(t*3.5+Math.PI);
+    const dir=LEG_DIRS[i];
+    let coxa=0,femur=-25,tibia=50;
+
+    if(currentMode==='forward'){
+      coxa=Math.cos(phase)*18*dir;
+      femur=-25+Math.max(0,Math.sin(phase))*55;
+      tibia=50-Math.max(0,Math.sin(phase))*40;
+    }else if(currentMode==='backward'){
+      coxa=-Math.cos(phase)*18*dir;
+      femur=-25+Math.max(0,Math.sin(phase))*55;
+      tibia=50-Math.max(0,Math.sin(phase))*40;
+    }else if(currentMode==='turn_left'){
+      const d=dir===1?1:-0.4;
+      coxa=Math.cos(phase)*18*d;
+      femur=-25+Math.max(0,Math.sin(phase))*55;
+      tibia=50-Math.max(0,Math.sin(phase))*40;
+    }else if(currentMode==='turn_right'){
+      const d=dir===1?-0.4:1;
+      coxa=Math.cos(phase)*18*d;
+      femur=-25+Math.max(0,Math.sin(phase))*55;
+      tibia=50-Math.max(0,Math.sin(phase))*40;
+    }else if(currentMode==='wave'){
+      if(i===0){
+        coxa=Math.sin(t*4)*25;
+        femur=-60+Math.sin(t*3)*20;
+        tibia=30;
+      }else{coxa=0;femur=-25;tibia=50}
+    }else if(currentMode==='dance'){
+      coxa=Math.sin(phase+i)*12*dir;
+      femur=-25+Math.max(0,Math.sin(phase*1.5+i))*40;
+      tibia=50-Math.max(0,Math.sin(phase*1.5+i))*30;
+    }else{
+      // stand — lerp
+      coxa=lerp(legAngles[i].coxa,0,0.1);
+      femur=lerp(legAngles[i].femur,-25,0.1);
+      tibia=lerp(legAngles[i].tibia,50,0.1);
+    }
+    legAngles[i].coxa=coxa;
+    legAngles[i].femur=femur;
+    legAngles[i].tibia=tibia;
+  }
+  // Body sway
+  if(currentMode==='dance'){
+    bodyRoll=Math.sin(t*2)*5;
+    bodyPitch=Math.cos(t*2.7)*4;
+  }else if(currentMode==='wave'){
+    bodyRoll=-4;
+  }else{
+    bodyRoll=lerp(bodyRoll,0,0.05);
+    bodyPitch=lerp(bodyPitch,0,0.05);
+  }
+}
+
+// ── IMU Polling ──
+async function pollIMU(){
+  try{
+    const d=await fetch('/api/imu/read').then(r=>r.json());
+    if(d?.ok){
+      bodyRoll=d.roll||bodyRoll;
+      bodyPitch=d.pitch||bodyPitch;
+      bodyYaw=d.yaw||bodyYaw;
+      document.getElementById('vRoll').textContent=(bodyRoll).toFixed(1)+'°';
+      document.getElementById('vPitch').textContent=(bodyPitch).toFixed(1)+'°';
+      document.getElementById('vYaw').textContent=(bodyYaw).toFixed(1)+'°';
+    }
+  }catch(e){}
+}
+setInterval(pollIMU,150);
+
+// ── Camera ──
+let drag=false,lastX=0,lastY=0;
+canvas.addEventListener('pointerdown',e=>{drag=true;lastX=e.clientX;lastY=e.clientY});
+window.addEventListener('pointerup',()=>drag=false);
+window.addEventListener('pointermove',e=>{
+  if(!drag)return;
+  camAngle+=(e.clientX-lastX)*0.008;
+  camH=Math.max(0.3,Math.min(3,camH-(e.clientY-lastY)*0.008));
+  lastX=e.clientX;lastY=e.clientY;
+});
+canvas.addEventListener('wheel',e=>{camDist=Math.max(1,Math.min(5,camDist+e.deltaY*0.003));e.preventDefault()},{passive:false});
+
+// ── Render ──
+let lastT=0;
+function frame(now){
+  requestAnimationFrame(frame);
+  const dt=Math.min((now-lastT)/1000,0.05);lastT=now;
+  applyGait(dt);
+
+  gl.clearColor(0.03,0.045,0.06,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);gl.enable(gl.CULL_FACE);
+
+  const asp=canvas.width/canvas.height;
+  const proj=perspective(deg(50),asp,0.1,50);
+  const cx=Math.sin(camAngle)*camDist,cz=Math.cos(camAngle)*camDist;
+  const view=lookAt([cx,camH,cz],[0,0.15,0],[0,1,0]);
+  const vp=mul(proj,view);
+
+  // Body transform
+  const bodyMat=mul(mul(mul(rotY(deg(bodyYaw)),rotX(deg(bodyPitch))),rotZ(deg(bodyRoll))),trans(0,bodyH,0));
+  draw(bodyMesh,bodyMat,mul(vp,bodyMat),[0.15,0.18,0.22]);
+
+  // Legs
+  for(let i=0;i<6;i++){
+    const a=legAngles[i];
+    const root=LEG_ROOTS[i];
+    const yawBase=LEG_YAWS[i];
+    const dir=LEG_DIRS[i];
+
+    // Coxa
+    let coxaMat=mul(bodyMat,mul(trans(root[0],root[1],root[2]),rotY(yawBase+deg(a.coxa))));
+    let coxaVis=mul(coxaMat,mul(rotX(deg(-90)),trans(0,0.17,0)));
+    draw(coxaMesh,coxaVis,mul(vp,coxaVis),[0.85,0.3,0.2]);
+
+    // Femur
+    let femurMat=mul(coxaMat,mul(rotZ(deg(a.femur)),trans(0,-0.15,0)));
+    let femurVis=mul(femurMat,mul(rotX(deg(-90)),trans(0,0.15,0)));
+    draw(femurMesh,femurVis,mul(vp,femurVis),[0.9,0.55,0.15]);
+
+    // Tibia
+    let tibiaMat=mul(femurMat,mul(rotZ(deg(a.tibia)),trans(0,-0.14,0)));
+    let tibiaVis=mul(tibiaMat,mul(rotX(deg(-90)),trans(0,0.14,0)));
+    draw(tibiaMesh,tibiaVis,mul(vp,tibiaVis),[0.2,0.55,0.85]);
+
+    // Foot
+    let footMat=mul(tibiaMat,trans(0,-0.28,0));
+    let footVis=mul(footMat,mul(rotX(deg(-90)),trans(0,0.07,0)));
+    const onGround=currentMode==='stand'||Math.max(0,Math.sin(GROUP_A.includes(i)?gaitTime*3.5:gaitTime*3.5+Math.PI))<0.1;
+    draw(footMesh,footVis,mul(vp,footVis),onGround?[0.3,0.9,0.3]:[0.9,0.9,0.9]);
+  }
+
+  // Ground grid
+  drawGround(vp);
+}
+
+function drawGround(vp){
+  // Simple ground plane lines
+  const lines=[];
+  for(let i=-5;i<=5;i++){
+    lines.push(i,0,-5, i,0,5);
+    lines.push(-5,0,i, 5,0,i);
+  }
+  const vb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,vb);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(lines),gl.STATIC_DRAW);
+  const gm=mat4();
+  gl.uniformMatrix4fv(uModel,false,gm);gl.uniformMatrix4fv(uMVP,false,vp);gl.uniform3fv(uColor,[0.12,0.14,0.18]);
+  gl.bindBuffer(gl.ARRAY_BUFFER,vb);gl.enableVertexAttribArray(aPos);gl.vertexAttribPointer(aPos,3,gl.FLOAT,false,0,0);
+  gl.disableVertexAttribArray(aNorm);
+  gl.drawArrays(gl.LINES,0,lines.length/3);
+  gl.enableVertexAttribArray(aNorm);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
