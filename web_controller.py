@@ -302,57 +302,47 @@ def get_leg_angles(leg_name, frame, params, gait_type='forward'):
         if side == 'R':
             direction = -direction
 
-    # ── الانزياح والزحف الجانبي (Crab Walk محسّن) ──
-    # المبدأ: ندور الجسم بزاوية + الأمامية تمشي أمام والخلفية خلف
-    # → القوى الأمام/خلف تتلاغى والجانبية تتراكم = حركة جانبية شبه نقية
-    # الأرجل الوسطى (RM, LM) ثابتة — ترفع وتنزل بمكانها بدون دفع
+    # ── الانزياح والزحف الجانبي (Crab Walk) ──
+    # المبدأ: ندور الجسم بزاوية ونمشي أمام — الروبوت يمشي بشكل قطري
+    # هاد أفضل حل ممكن بدون IK — الـ Coxa بيحرك أمام/خلف فقط
     coxa_angle_offset = 0
 
     if gait_type == 'shift_left':
-        coxa_angle_offset = -25
-        amp = amp * 0.65
-        if leg_name in ('RR', 'LR'):
-            direction = -direction
-        elif leg_name in ('RM', 'LM'):
-            direction = 0
+        coxa_angle_offset = -18
+        amp = amp * 0.7
     elif gait_type == 'shift_right':
-        coxa_angle_offset = 25
-        amp = amp * 0.65
-        if leg_name in ('RR', 'LR'):
-            direction = -direction
-        elif leg_name in ('RM', 'LM'):
-            direction = 0
-
+        coxa_angle_offset = 18
+        amp = amp * 0.7
     elif gait_type == 'strafe_left' or gait_type == 'crab_walk':
-        coxa_angle_offset = -25
-        if leg_name in ('RR', 'LR'):
-            direction = -direction
-        elif leg_name in ('RM', 'LM'):
-            direction = 0
+        coxa_angle_offset = -18
     elif gait_type == 'strafe_right':
-        coxa_angle_offset = 25
-        if leg_name in ('RR', 'LR'):
-            direction = -direction
-        elif leg_name in ('RM', 'LM'):
-            direction = 0
+        coxa_angle_offset = 18
 
-    # ── تعديل الارتفاع للتضاريس ──
+    # ── تعديل الارتفاع والأنماط ──
     femur_lift_extra = 0
+    femur_stance_offset = 0
     if gait_type == 'climb':
         femur_lift_extra = 15
+    elif gait_type == 'prowl':
+        femur_stance_offset = 18
+        amp = amp * 0.5
+    elif gait_type == 'high_step':
+        femur_lift_extra = 25
+        amp = amp * 0.8
+
+    base_femur = leg["femur_stand"] + femur_stance_offset
 
     if f < half:
         # ── SWING phase ──────────────────────────────
         progress = f / half  # 0.0 → 1.0
         coxa = leg["coxa_stand"] + direction * (-amp + 2 * amp * progress) + coxa_angle_offset
-        # femur يرسم قوس باستخدام sin → ناعم وطبيعي
-        femur = leg["femur_stand"] + (leg["femur_lift"] + femur_lift_extra - leg["femur_stand"]) \
+        femur = base_femur + (leg["femur_lift"] + femur_lift_extra - base_femur) \
                 * math.sin(progress * math.pi)
     else:
         # ── STANCE phase ─────────────────────────────
         progress = (f - half) / half  # 0.0 → 1.0
         coxa = leg["coxa_stand"] + direction * (amp - 2 * amp * progress) + coxa_angle_offset
-        femur = leg["femur_stand"]  # ثابت على الأرض
+        femur = base_femur
 
     tibia = leg["tibia"]  # ما بيتحرك
 
@@ -1325,23 +1315,11 @@ def _run_ripple_gait(params, speed=1.0, max_cycles=0, direction='forward'):
             # اتجاه الحركة
             coxa_body_offset = 0
             if direction == 'strafe_left':
-                coxa_body_offset = -25
-                base_sign = 1 if side == "R" else -1
-                if leg_name in ('RR', 'LR'):
-                    sign = -base_sign
-                elif leg_name in ('RM', 'LM'):
-                    sign = 0
-                else:
-                    sign = base_sign
+                coxa_body_offset = -18
+                sign = 1 if side == "R" else -1
             elif direction == 'strafe_right':
-                coxa_body_offset = 25
-                base_sign = 1 if side == "R" else -1
-                if leg_name in ('RR', 'LR'):
-                    sign = -base_sign
-                elif leg_name in ('RM', 'LM'):
-                    sign = 0
-                else:
-                    sign = base_sign
+                coxa_body_offset = 18
+                sign = 1 if side == "R" else -1
             elif direction == 'turn_left':
                 sign = 1 if side == "R" else -1
             elif direction == 'turn_right':
@@ -1762,6 +1740,236 @@ def _move_sleep_pose(speed=1.0):
     smooth_move_leg(list(sleep_pos.keys()), sleep_pos, steps=s, delay=dl)
 
 
+def _move_flatten(speed=1.0):
+    """تسطيح — الجسم ينزل ببطء شديد حتى يلامس الأرض (3 مراحل)."""
+    s = max(20, int(40 / speed))
+    dl = max(0.03, 0.05 / speed)
+
+    mid = {}
+    for k, v in _STAND.items():
+        if k[1] in ('1','4','7'):
+            mid[k] = v + 20
+        else:
+            mid[k] = v
+    smooth_move_leg(list(mid.keys()), mid, steps=s, delay=dl)
+
+    low = {}
+    for k, v in _STAND.items():
+        if k[1] in ('1','4','7'):
+            low[k] = v + 40
+        elif k[1] in ('0','3','6'):
+            low[k] = max(55, v - 15) if k[0] == 'R' else min(125, v + 15)
+        else:
+            low[k] = v
+    smooth_move_leg(list(low.keys()), low, steps=s, delay=dl)
+
+    flat = {}
+    for k, v in _STAND.items():
+        ch = k[1]
+        if ch in ('1','4','7'):
+            flat[k] = min(130, v + 58)
+        elif ch in ('0','3','6'):
+            flat[k] = max(55, v - 25) if k[0] == 'R' else min(125, v + 25)
+        elif ch in ('2','5','8'):
+            flat[k] = max(50, v - 25)
+        else:
+            flat[k] = v
+    smooth_move_leg(list(flat.keys()), flat, steps=s, delay=dl)
+
+
+def _move_push_up(speed=1.0):
+    """ضغط — 3 تمارين ضغط."""
+    s_down = max(8, int(15 / speed))
+    s_up = max(6, int(10 / speed))
+    dl = max(0.02, 0.03 / speed)
+    down = {k: v + 30 if k[1] in ('1','4','7') else v for k, v in _STAND.items()}
+    for _ in range(3):
+        smooth_move_leg(list(down.keys()), down, steps=s_down, delay=dl)
+        time.sleep(0.15 / speed)
+        smooth_move_leg(list(_STAND.keys()), _STAND, steps=s_up, delay=dl)
+        time.sleep(0.15 / speed)
+
+
+def _move_tippy_toes(speed=1.0):
+    """على الأطراف — الجسم يرتفع لأقصى ارتفاع."""
+    s = max(12, int(20 / speed))
+    dl = max(0.02, 0.04 / speed)
+    high = {}
+    for k, v in _STAND.items():
+        if k[1] in ('1','4','7'):
+            high[k] = max(45, v - 15)
+        elif k[1] in ('2','5','8'):
+            high[k] = max(50, v - 10)
+        else:
+            high[k] = v
+    smooth_move_leg(list(high.keys()), high, steps=s, delay=dl)
+    time.sleep(1.0 / speed)
+    smooth_move_leg(list(_STAND.keys()), _STAND, steps=s, delay=dl)
+
+
+def _move_look_around(speed=1.0):
+    """تلفت — الجسم يدور ببطء يمين ويسار كأنه يتفقد المحيط."""
+    s = max(8, int(15 / speed))
+    dl = max(0.02, 0.04 / speed)
+    look_l = {**_STAND,
+              'R0': _STAND['R0'] + 20, 'L0': _STAND['L0'] - 20,
+              'R3': _STAND['R3'] + 10, 'L3': _STAND['L3'] - 10,
+              'R6': _STAND['R6'] - 15, 'L6': _STAND['L6'] + 15}
+    smooth_move_leg(list(look_l.keys()), look_l, steps=s, delay=dl)
+    time.sleep(0.5 / speed)
+    look_r = {**_STAND,
+              'R0': _STAND['R0'] - 20, 'L0': _STAND['L0'] + 20,
+              'R3': _STAND['R3'] - 10, 'L3': _STAND['L3'] + 10,
+              'R6': _STAND['R6'] + 15, 'L6': _STAND['L6'] - 15}
+    smooth_move_leg(list(look_r.keys()), look_r, steps=s, delay=dl)
+    time.sleep(0.5 / speed)
+    smooth_move_leg(list(_STAND.keys()), _STAND, steps=s, delay=dl)
+
+
+def _move_pounce(speed=1.0):
+    """انقضاض — ينخفض ويتحفز ثم يقفز للأمام."""
+    dl = max(0.01, 0.03 / speed)
+    crouch = {}
+    for k, v in _STAND.items():
+        if k[1] in ('1','4','7'):
+            crouch[k] = v + 25
+        else:
+            crouch[k] = v
+    smooth_move_leg(list(crouch.keys()), crouch, steps=max(10, int(18/speed)), delay=dl)
+    time.sleep(0.4 / speed)
+    spring = {**_STAND,
+              'R0': 120, 'L0': 60,
+              'R1': max(45, _STAND['R1'] - 10), 'L1': max(45, _STAND['L1'] - 10),
+              'R7': max(45, _STAND['R7'] - 10), 'L7': max(45, _STAND['L7'] - 10)}
+    smooth_move_leg(list(spring.keys()), spring, steps=max(3, int(5/speed)), delay=0.01)
+    time.sleep(0.3 / speed)
+    smooth_move_leg(list(_STAND.keys()), _STAND, steps=max(10, int(15/speed)), delay=dl)
+
+
+def _move_stomp(speed=1.0):
+    """دوس — ضرب الأرجل بالأرض بالتناوب."""
+    s = max(3, int(5 / speed))
+    dl = max(0.01, 0.02 / speed)
+    legs_f = ['R1', 'L1', 'R7', 'L7', 'R4', 'L4']
+    for fk in legs_f:
+        lift_t = {fk: _STAND[fk] + 35}
+        smooth_move_leg([fk], lift_t, steps=s, delay=dl)
+        slam_t = {fk: max(45, _STAND[fk] - 8)}
+        smooth_move_leg([fk], slam_t, steps=2, delay=0.008)
+        time.sleep(0.04)
+        smooth_move_leg([fk], {fk: _STAND[fk]}, steps=s, delay=dl)
+    time.sleep(0.1)
+
+
+def _move_scared(speed=1.0):
+    """خوف — انسحاب سريع ثم انكماش ثم تعافي بطيء."""
+    dl = max(0.01, 0.02 / speed)
+    jump = {}
+    for k, v in _STAND.items():
+        if k[1] in ('0','3','6'):
+            jump[k] = max(55, v - 20) if k[0] == 'R' else min(125, v + 20)
+        else:
+            jump[k] = v
+    smooth_move_leg(list(jump.keys()), jump, steps=3, delay=0.01)
+    curl = dict(jump)
+    for k in curl:
+        if k[1] in ('1','4','7'):
+            curl[k] = _STAND[k] + 30
+    smooth_move_leg(list(curl.keys()), curl, steps=max(5, int(8/speed)), delay=dl)
+    time.sleep(0.8 / speed)
+    smooth_move_leg(list(_STAND.keys()), _STAND, steps=max(12, int(20/speed)), delay=0.03)
+
+
+def _move_dizzy(speed=1.0):
+    """دوخة — تأرجح عشوائي كأن الروبوت فقد توازنه."""
+    import random
+    s = max(4, int(7 / speed))
+    dl = max(0.01, 0.02 / speed)
+    for _ in range(6):
+        w = {}
+        for k, v in _STAND.items():
+            if k[1] in ('1','4','7'):
+                w[k] = max(50, min(130, v + random.randint(-10, 18)))
+            elif k[1] in ('0','3','6'):
+                w[k] = max(50, min(130, v + random.randint(-18, 18)))
+            else:
+                w[k] = v
+        smooth_move_leg(list(w.keys()), w, steps=s, delay=dl)
+    smooth_move_leg(list(_STAND.keys()), _STAND, steps=8, delay=0.03)
+
+
+def _move_wiggle(speed=1.0):
+    """هز — الجزء الخلفي يتأرجح يمين ويسار."""
+    s = max(4, int(7 / speed))
+    dl = max(0.01, 0.02 / speed)
+    for _ in range(4):
+        wr = {**_STAND,
+              'R6': _STAND['R6'] + 20, 'L6': _STAND['L6'] - 20,
+              'R7': _STAND['R7'] + 8,  'L7': _STAND['L7'] - 8}
+        smooth_move_leg(list(wr.keys()), wr, steps=s, delay=dl)
+        wl = {**_STAND,
+              'R6': _STAND['R6'] - 20, 'L6': _STAND['L6'] + 20,
+              'R7': _STAND['R7'] - 8,  'L7': _STAND['L7'] + 8}
+        smooth_move_leg(list(wl.keys()), wl, steps=s, delay=dl)
+    smooth_move_leg(list(_STAND.keys()), _STAND, steps=s, delay=dl)
+
+
+def _move_peek(speed=1.0):
+    """تطلع — يميل للأمام ببطء ثم يتلفت يمين ويسار."""
+    s = max(10, int(18 / speed))
+    dl = max(0.02, 0.04 / speed)
+    peek = {**_STAND,
+            'R0': _STAND['R0'] + 15, 'L0': _STAND['L0'] - 15,
+            'R1': _STAND['R1'] + 20, 'L1': _STAND['L1'] + 20,
+            'R7': max(45, _STAND['R7'] - 12), 'L7': max(45, _STAND['L7'] - 12)}
+    smooth_move_leg(list(peek.keys()), peek, steps=s, delay=dl)
+    time.sleep(0.5 / speed)
+    s2 = max(6, int(10 / speed))
+    pr = dict(peek)
+    pr['R0'] = _STAND['R0'] - 10
+    pr['L0'] = _STAND['L0'] + 10
+    smooth_move_leg(list(pr.keys()), pr, steps=s2, delay=dl)
+    time.sleep(0.3 / speed)
+    pl = dict(peek)
+    pl['R0'] = _STAND['R0'] + 25
+    pl['L0'] = _STAND['L0'] - 25
+    smooth_move_leg(list(pl.keys()), pl, steps=s2, delay=dl)
+    time.sleep(0.3 / speed)
+    smooth_move_leg(list(_STAND.keys()), _STAND, steps=s, delay=dl)
+
+
+def _move_gallop(speed=1.0):
+    """عدو — مشي سريع بخطوات كبيرة."""
+    params = _load_gait_params('forward_tripod')
+    if params:
+        global gait_running
+        gait_running = True
+        gait_event.set()
+        _run_forward_gait(params, speed * 2.0, 6, 'forward')
+
+
+def _move_moonwalk(speed=1.0):
+    """مون ووك — مشي خلفي أنيق مع تأرجح."""
+    s = max(5, int(8 / speed))
+    dl = max(0.01, 0.02 / speed)
+    for _ in range(3):
+        sway_r = {**_STAND,
+                  'R1': _STAND['R1'] + 6, 'R4': _STAND['R4'] + 6, 'R7': _STAND['R7'] + 6,
+                  'L1': _STAND['L1'] - 6, 'L4': _STAND['L4'] - 6, 'L7': _STAND['L7'] - 6}
+        smooth_move_leg(list(sway_r.keys()), sway_r, steps=s, delay=dl)
+        sway_l = {**_STAND,
+                  'L1': _STAND['L1'] + 6, 'L4': _STAND['L4'] + 6, 'L7': _STAND['L7'] + 6,
+                  'R1': _STAND['R1'] - 6, 'R4': _STAND['R4'] - 6, 'R7': _STAND['R7'] - 6}
+        smooth_move_leg(list(sway_l.keys()), sway_l, steps=s, delay=dl)
+    smooth_move_leg(list(_STAND.keys()), _STAND, steps=4, delay=0.02)
+    params = _load_gait_params('forward_tripod')
+    if params:
+        global gait_running
+        gait_running = True
+        gait_event.set()
+        _run_forward_gait(params, speed * 0.6, 4, 'backward')
+
+
 # ── Special Move Endpoint ──
 @app.route("/api/special/<move_name>", methods=["POST"])
 def special_move(move_name):
@@ -1769,17 +1977,29 @@ def special_move(move_name):
     speed = float(data.get('speed', 1.0))
 
     specials = {
-        'wave':       _move_wave,
-        'dance':      _move_dance,
-        'shake':      _move_shake,
-        'salute':     _move_salute,
-        'roar':       _move_roar,
-        'spin':       _move_spin,
-        'bow':        _move_bow,
-        'stretch':    _move_stretch,
-        'idle_sway':  _move_idle_sway,
-        'wake_up':    _move_wake_up,
-        'sleep_pose': _move_sleep_pose,
+        'wave':        _move_wave,
+        'dance':       _move_dance,
+        'shake':       _move_shake,
+        'salute':      _move_salute,
+        'roar':        _move_roar,
+        'spin':        _move_spin,
+        'bow':         _move_bow,
+        'stretch':     _move_stretch,
+        'idle_sway':   _move_idle_sway,
+        'wake_up':     _move_wake_up,
+        'sleep_pose':  _move_sleep_pose,
+        'flatten':     _move_flatten,
+        'push_up':     _move_push_up,
+        'tippy_toes':  _move_tippy_toes,
+        'look_around': _move_look_around,
+        'pounce':      _move_pounce,
+        'stomp':       _move_stomp,
+        'scared':      _move_scared,
+        'dizzy':       _move_dizzy,
+        'wiggle':      _move_wiggle,
+        'peek':        _move_peek,
+        'gallop':      _move_gallop,
+        'moonwalk':    _move_moonwalk,
     }
 
     fn = specials.get(move_name)
@@ -1869,23 +2089,11 @@ def _run_smooth_ripple(params, speed=1.0, max_cycles=0, direction='forward'):
             # اتجاه الحركة
             coxa_body_offset = 0
             if direction == 'strafe_left':
-                coxa_body_offset = -25
-                base_sign = 1 if side == "R" else -1
-                if leg_name in ('RR', 'LR'):
-                    sign = -base_sign
-                elif leg_name in ('RM', 'LM'):
-                    sign = 0
-                else:
-                    sign = base_sign
+                coxa_body_offset = -18
+                sign = 1 if side == "R" else -1
             elif direction == 'strafe_right':
-                coxa_body_offset = 25
-                base_sign = 1 if side == "R" else -1
-                if leg_name in ('RR', 'LR'):
-                    sign = -base_sign
-                elif leg_name in ('RM', 'LM'):
-                    sign = 0
-                else:
-                    sign = base_sign
+                coxa_body_offset = 18
+                sign = 1 if side == "R" else -1
             elif direction == 'turn_left':
                 sign = 1 if side == "R" else 1
             elif direction == 'turn_right':
