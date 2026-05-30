@@ -109,7 +109,10 @@ input[type=range]{font-size:16px}
 </header>
 
 <!-- Emergency Stop -->
-<button class="btn btn-stop-big" onclick="emergencyStop()">⛔ إيقاف طارئ</button>
+<div style="display: flex; gap: 10px;">
+  <button class="btn btn-stop-big" style="flex: 2; margin-bottom: 10px;" onclick="emergencyStop()">⛔ إيقاف طارئ</button>
+  <button class="btn" style="flex: 1; background: #2e8b57; color: #fff; padding: 16px; font-size: 18px; border-radius: 14px; border: 3px solid #3cb371; margin-bottom: 10px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#3cb371'" onmouseout="this.style.background='#2e8b57'" onclick="clearEstop()">🟢 إلغاء الطوارئ</button>
+</div>
 
 <!-- Status -->
 <div class="status-bar">
@@ -366,17 +369,21 @@ async function init() {
 
 // ── Emergency Stop ──
 async function emergencyStop() {
-  await fetch('/api/gait/forward/stop', {method:'POST'});
-  await fetch('/api/gait/smooth-ripple/stop', {method:'POST'});
-  await fetch('/api/balance/stop', {method:'POST'});
-  await fetch('/api/calibrate', {method:'POST'});
-  document.getElementById('gait-status').textContent = '🔴 إيقاف طارئ';
-  document.getElementById('smoothStatus').textContent = '🔴 إيقاف طارئ';
+  // إيقاف حقيقي: قطع تغذية فيزيائي وتصفير الحركة
+  await fetch('/api/estop', {method:'POST'});
+  document.getElementById('gait-status').textContent = '⛔ طوارئ — التغذية مقطوعة';
+  document.getElementById('smoothStatus').textContent = '⛔ طوارئ';
   document.getElementById('btnBalStart').style.display = '';
   document.getElementById('btnBalStop').style.display = 'none';
   if (_gaitPoll) { clearInterval(_gaitPoll); _gaitPoll = null; }
   if (smoothPoll) { clearInterval(smoothPoll); smoothPoll = null; }
   if (balPoll) { clearInterval(balPoll); balPoll = null; }
+}
+
+async function clearEstop() {
+  await fetch('/api/estop/clear', {method:'POST'});
+  document.getElementById('gait-status').textContent = '⬛️ واقف';
+  document.getElementById('smoothStatus').textContent = '⬛️ واقف';
 }
 
 // ── Motors Off ──

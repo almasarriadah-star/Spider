@@ -112,11 +112,10 @@ python3 web_controller.py
 ## مخطط المشي — Gait Planner
 
 ### الغرض
-نظام مشي أوتوماتيكي للروبوت العنكبوت. يتيح حفظ خطط المشي (gait plans) وتنفيذها
-في thread خلفي باستخدام gait نمط tripod (مثلثي).
+نظام مشي أوتوماتيكي للروبوت العنكبوت. يتيح حفظ خطط المشي (gait plans) وتنفيذها في thread خلفي باستخدام gait نمط tripod (مثلثي).
 
-### تخزين خطط المشي (`gait_params.json`)
-كل خطة تتكون من اسم + معلمات لكل مجموعة أرجل (6 مجموعات: RF, RM, RR, LF, LM, LR).
+### تخزين خطط المشي (`config/gait_params.json`)
+نقل الملف من المجلد الجذري إلى مجلد `config/`. كل خطة تتكون من اسم + معلمات لكل مجموعة أرجل (6 مجموعات: RF, RM, RR, LF, LM, LR).
 كل مجموعة تحتوي 4 أوضاع:
 - **stance** — وضعية الوقوف
 - **lift** — رفع الرجل
@@ -127,7 +126,7 @@ python3 web_controller.py
 - `GET /gait` — صفحة الويب (`templates/gait.html`)
 
 ### Gait API Endpoints
-- `GET /api/gait/params` — جلب كل خطط المشي المحفوظة
+- `GET /api/gait/params` — جلب كل خطط المشي المحفوظة من `config/gait_params.json`
 - `POST /api/gait/params/save` — حفظ خطة `{name, params}`
 - `POST /api/gait/params/load` — تحميل خطة `{name}`
 - `GET /api/gait/plans` — قائمة أسماء الخطط
@@ -146,11 +145,6 @@ python3 web_controller.py
 - Phase B: مجموعة B ترفع وتتأرجح للأمام، مجموعة A تدفع للخلف
 - التحريك سلس باستخدام `smooth_move_leg()` مع استيفاء خطي
 
-### ملاحظات مهمة
-- المشي يشتغل في background thread (daemon)
-- عند الإيقاف، الروبوت يرجع لوضعية stance
-- `gait_running` متغير عام للتحكم بإيقاف الـ thread
-
 ---
 
 ## مشي العنكبوت المتناغم — Ripple Gait
@@ -158,11 +152,8 @@ python3 web_controller.py
 ### الغرض
 نوع مشي جديد أهدأ وأثبت من Tripod. رجل واحدة بس ترتفع بالهوا بالتسلسل (مثل موجة من الخلف للأمام) — دايماً 5 أرجل على الأرض.
 
-### الفرق عن Tripod
-- Tripod: 3 أرجل بالهوا → الجسم يهتز قليلاً
-- Ripple: 1 رجل بالهوا → الجسم ثابت تقريباً، حركة ناعمة متل العنكبوت الحقيقي
-
-### ملف البيانات (`ripple_gait_params.json`)
+### ملف البيانات (`config/ripple_gait_params.json`)
+نقل الملف من المجلد الجذري إلى مجلد `config/`.
 - `LIFT_DEG`: 14° (رفع خفيف، نص Tripod)
 - `SWING_DEG`: 20° (تأرجح Coxa)
 - `total_frames`: 60 فريم بدل 8
@@ -175,5 +166,31 @@ python3 web_controller.py
 - `POST /api/gait/ripple/stop` — إيقاف نظيف
 - `GET /api/gait/ripple/status` — الحالة `{running, step_count, current_phase}`
 
-### وثيقة تفصيلية
-- `Sonnet/ripple_gait.md` — شرح المبدأ والمعادلات والمقارنة مع Tripod
+---
+
+## أمان الحركة، التنظيم، والضبط الحي (الخطط 01-04)
+
+### 📂 بنية تنظيم ملفات الحركة (`spider/` و `config/`)
+تم تقسيم كود الحركة من `web_controller.py` إلى ملفات تخصصية داخل حزمة `spider/` وإعدادات معزولة داخل `config/`:
+* **`config/servo_limits.json`**: قيود زوايا المحركات لمنع تخطي الحدود الميكانيكية وتصادم الهيكل.
+* **`config/balance_config.json`**: إعدادات PID ومعاملات التوازن الذاتي عبر الـ IMU.
+* **`config/motion.json`**: بارامترات المحكّم (Arbiter Hz, Max Deg Per Tick) وإزاحات حركات الجسم والمشي الجانبي.
+* **`spider/hardware.py`**: تهيئة PCA9685، بث PWM، وقاطع التغذية الفيزيائي للمحركات (GPIO 17).
+* **`spider/config.py`**: إدارة حدود المحركات وتحديثها حياً عبر دالة `reload()`.
+* **`spider/safety.py`**: المحكّم الموحد `MotionArbiter` لإدارة ملكية الحركة، حماية تيار الذروة، وتنفيذ الإيقاف الطارئ.
+* **`spider/constants.py`**: مرجع زوايا الوقوف الافتراضية الصحيحة (`_STAND`).
+* **`spider/imu.py`**: قراءة وتصفير وبث مستشعر BNO085.
+* **`spider/gaits.py`**: محركات المشي (Tripod, Ripple) وجلب بارامترات المشي ديناميكياً.
+* **`spider/balance.py`**: وحدة تحكم التوازن ومستقبلات PID مع دعم `reload()`.
+* **`spider/moves.py`**: الحركات الاستعراضية الـ 23 مضافاً إليها حركات الجسم مع حماية التحكيم الكاملة.
+
+### 🌐 واجهات برمجية مضافة للضبط والأمان
+* **`POST /api/estop`**: إيقاف طارئ برمجي + قطع التغذية الفيزيائي + تصفير الأهداف فوراً.
+* **`POST /api/estop/clear`**: إلغاء حالة الطوارئ وإرجاع التيار بأمان دون حركات مفاجئة.
+* **`POST /api/off`**: انتقال سلس لوضعية الوقوف ثم إطفاء PWM وقاطع التغذية الفيزيائية.
+* **`GET /api/config/<name>`**: جلب أي ملف إعداد من مجلد `config/`.
+* **`POST /api/config/<name>`**: حفظ التحديثات وتطبيقها حياً مع الاحتفاظ بنسخة احتياطية `.bak`.
+* **`POST /api/config/<name>/restore`**: استعادة النسخة الاحتياطية وتطبيقها حياً.
+* **`POST /api/limit/nudge`**: تحريك محرك مفرد للمعايرة البصرية متجاوزاً الحدود مؤقتاً بحذر.
+* **`POST /api/limit/set`**: حفظ الحدود المكتشفة بالعين لمحرك معين وإعادة تحميل الملف.
+

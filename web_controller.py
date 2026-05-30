@@ -8,121 +8,44 @@ import threading
 app = Flask(__name__)
 
 # ── Hardware Setup ──
-HARDWARE = False
-try:
-    from adafruit_servokit import ServoKit
-    right_pca = ServoKit(channels=16, address=0x40)
-    left_pca = ServoKit(channels=16, address=0x44)
-    HARDWARE = True
-except Exception:
-    pass
+from spider.hardware import HARDWARE, right_pca, left_pca, i2c_lock
 
-# ── I2C Lock — حماية PCA9685 من threads المتعددة ──
-i2c_lock = threading.Lock()
+# ── Constants (من spider.constants) ──
+from spider.constants import (
+    MIN_ANGLE, MAX_ANGLE,
+    DEFAULT_RIGHT, DEFAULT_LEFT,
+    SERVO_NAMES, LEG_GROUPS, _STAND,
+)
 
-# ── BNO085 IMU Setup ──
-BNO_READY = False
-bno = None
-bno_lock = threading.Lock()
-bno_zero_roll = 0.0
-bno_zero_pitch = 0.0
-
-try:
-    import serial
-    from adafruit_bno08x_rvc import BNO08x_RVC
-    uart = serial.Serial("/dev/serial0", 115200, timeout=0.5)
-    bno = BNO08x_RVC(uart)
-    BNO_READY = True
-except Exception:
-    pass
-
-
-def read_bno_single():
-    if not BNO_READY:
-        return None
-    acquired = bno_lock.acquire(timeout=0.2)
-    if not acquired:
-        return None
-    try:
-        old_timeout = uart.timeout
-        uart.timeout = 0.1  # 100ms max — ما نعلّق أبداً
-        try:
-            yaw, pitch, roll, ax, ay, az = bno.heading
-            return {
-                "roll": round(roll - bno_zero_roll, 2),
-                "pitch": round(pitch - bno_zero_pitch, 2),
-                "yaw": round(yaw, 2),
-                "raw_roll": round(roll, 2),
-                "raw_pitch": round(pitch, 2),
-                "ax": round(ax, 3),
-                "ay": round(ay, 3),
-                "az": round(az, 3)
-            }
-        except Exception:
-            return None
-        finally:
-            uart.timeout = old_timeout
-    finally:
-        bno_lock.release()
-
-# ── Constants ──
-MIN_ANGLE = 45
-MAX_ANGLE = 135
-
-DEFAULT_RIGHT = {
-    0: 90, 1: 67, 2: 91,
-    3: 92, 4: 57, 5: 92,
-    6: 93, 7: 65, 8: 94
-}
-
-DEFAULT_LEFT = {
-    0: 90, 1: 54, 2: 77,
-    3: 85, 4: 74, 5: 94,
-    6: 94, 7: 64, 8: 89
-}
-
-SERVO_NAMES = {
-    "R0": "RF Coxa",  "R1": "RF Femur",  "R2": "RF Tibia",
-    "R3": "RM Coxa",  "R4": "RM Femur",  "R5": "RM Tibia",
-    "R6": "RR Coxa",  "R7": "RR Femur",  "R8": "RR Tibia",
-    "L0": "LF Coxa",  "L1": "LF Femur",  "L2": "LF Tibia",
-    "L3": "LM Coxa",  "L4": "LM Femur",  "L5": "LM Tibia",
-    "L6": "LR Coxa",  "L7": "LR Femur",  "L8": "LR Tibia",
-}
-
-# Leg groups: group_name -> [servo_keys]
-LEG_GROUPS = {
-    "RF": ["R0", "R1", "R2"],
-    "RM": ["R3", "R4", "R5"],
-    "RR": ["R6", "R7", "R8"],
-    "LF": ["L0", "L1", "L2"],
-    "LM": ["L3", "L4", "L5"],
-    "LR": ["L6", "L7", "L8"],
-}
+# ── IMU (من spider.imu) ──
+from spider.imu import (
+    BNO_READY, read_bno_single,
+    bno_zero_roll, bno_zero_pitch,
+    startup_imu_zero, imu_zero_manual, imu_stream,
+)
+import spider.imu as _imu_mod   # مرجع مباشر لتحديث bno_zero_*
 
 BASE_DIR = os.path.dirname(__file__)
 POSITIONS_FILE = os.path.join(BASE_DIR, "positions.json")
-DEFAULTS_FILE = os.path.join(BASE_DIR, "leg_defaults.json")
-PRESETS_FILE = os.path.join(BASE_DIR, "leg_presets.json")
+DEFAULTS_FILE  = os.path.join(BASE_DIR, "leg_defaults.json")
+PRESETS_FILE   = os.path.join(BASE_DIR, "leg_presets.json")
 
-# ── Gait Planner Storage ──
-GAIT_FILE = os.path.join(BASE_DIR, "gait_params.json")
-BALANCE_CONFIG_FILE = os.path.join(BASE_DIR, "balance_config.json")
-gait_running = False
-gait_event = threading.Event()  # thread-safe replacement
-gait_thread = None
-gait_lock = threading.Lock()
-gait_step_count = 0
-gait_phase = "A"
+# ── Gait State ──
+GAIT_FILE          = os.path.join(BASE_DIR, "config", "gait_params.json")
+BALANCE_CONFIG_FILE = os.path.join(BASE_DIR, "config", "balance_config.json")
+gait_running      = False
+gait_event        = threading.Event()
+gait_thread       = None
+gait_lock         = threading.Lock()
+gait_step_count   = 0
+gait_phase        = "A"
 gait_current_phase = "idle"
 
-# ── Current State ──
-current = {}
-for ch in range(9):
-    current[f"R{ch}"] = DEFAULT_RIGHT[ch]
-    current[f"L{ch}"] = DEFAULT_LEFT[ch]
+# ── State ──
+import spider
+current = spider.current
+from spider.safety import arbiter, set_force_stop
 
-# ── علامة: هل المحركات شغّالة ──
 _servos_initialized = False
 
 
@@ -131,38 +54,16 @@ def limit_angle(a):
 
 
 def set_servo(key, angle):
-    angle = limit_angle(angle)
-    side = key[0]
-    ch = int(key[1:])
-    if HARDWARE:
-        with i2c_lock:
-            if side == "R":
-                right_pca.servo[ch].angle = angle
-            else:
-                left_pca.servo[ch].angle = angle
-    current[key] = angle
-    return angle
+    owner = arbiter.owner()
+    arbiter.set_target(owner, {key: angle})
+    from spider.config import servo_limit
+    return servo_limit(key, angle)
 
 
 def set_servos_batch(updates):
-    """يكتب عدة محركات دفعة واحدة ضمن قفل واحد — أسرع بكثير"""
-    right_writes = {}
-    left_writes = {}
-    for key, angle in updates.items():
-        angle = limit_angle(angle)
-        side = key[0]
-        ch = int(key[1:])
-        if side == "R":
-            right_writes[ch] = angle
-        else:
-            left_writes[ch] = angle
-        current[key] = angle
-    if HARDWARE:
-        with i2c_lock:
-            for ch, angle in right_writes.items():
-                right_pca.servo[ch].angle = angle
-            for ch, angle in left_writes.items():
-                left_pca.servo[ch].angle = angle
+    """يكتب عدة محركات دفعة واحدة عبر محكّم الحركة الآمن"""
+    owner = arbiter.owner()
+    arbiter.set_target(owner, updates)
 
 
 def load_json(path):
@@ -201,27 +102,30 @@ def save_leg_presets(data):
     save_json(PRESETS_FILE, data)
 
 
-# ── Lazy Servo Initialization ──
 def apply_startup_calibration():
     """يحرّك المحركات لوضعية التوازن — ينطبق فقط أول مرة يُطلب فيها"""
     global _servos_initialized
-    if not HARDWARE or _servos_initialized:
+    if _servos_initialized:
         return
+    try:
+        arbiter.start()
+    except Exception as e:
+        print(f"Error starting arbiter: {e}")
+
     defaults = load_leg_defaults()
-    print("Applying startup calibration...")
-    with i2c_lock:
-        for group, keys in LEG_GROUPS.items():
-            for key in keys:
-                base = DEFAULT_RIGHT[int(key[1:])] if key[0] == "R" else DEFAULT_LEFT[int(key[1:])]
-                val = defaults.get(group, {}).get(key, base)
-                side = key[0]
-                ch = int(key[1:])
-                if side == "R":
-                    right_pca.servo[ch].angle = val
-                else:
-                    left_pca.servo[ch].angle = val
-                current[key] = val
-                time.sleep(0.03)
+    print("Applying startup calibration using MotionArbiter...")
+
+    targets = {}
+    for group, keys in LEG_GROUPS.items():
+        for key in keys:
+            base = DEFAULT_RIGHT[int(key[1:])] if key[0] == "R" else DEFAULT_LEFT[int(key[1:])]
+            targets[key] = defaults.get(group, {}).get(key, base)
+
+    if arbiter.acquire("startup"):
+        from spider import goto
+        goto("startup", targets, timeout=8.0)
+        arbiter.release("startup")
+
     _servos_initialized = True
     print("Startup calibration applied - servos holding position")
 
@@ -233,139 +137,35 @@ def _ensure_servos_on():
 
 
 # ── Gait Helpers ──
-# This flag forces ALL movement to stop immediately
 _force_stop = False
 
-# ────── Easing Functions ──────
-def ease_smoothstep(t):
-    """Hermite smoothstep — بداية ونهاية ناعمة"""
-    t = max(0.0, min(1.0, t))
-    return t * t * (3 - 2 * t)
-
-def ease_cosine(t):
-    """Cosine ease — أنعم من smoothstep"""
-    return (1 - math.cos(t * math.pi)) / 2
-
-# الدالة الافتراضية
+# ── Easing & Gait Functions (الاستيراد من spider.gaits) ──
+from spider.gaits import (
+    ease_smoothstep, ease_cosine, smooth_move_leg, set_ease, get_ease_name,
+    _run_forward_gait, _run_lateral_gait, _run_ripple_gait, _run_smooth_ripple,
+    _load_gait_params, _load_ripple_params, get_leg_angles
+)
 _ease_func = ease_smoothstep
 
+class GlobalRef:
+    def __init__(self, name):
+        self.name = name
 
-def smooth_move_leg(keys, targets, steps=10, delay=0.03, easing=None):
-    """Smoothly move a set of servos to target angles with easing. Respects _force_stop."""
+    def __getitem__(self, item):
+        return globals()[self.name]
+
+    def __setitem__(self, item, value):
+        globals()[self.name] = value
+
+
+def _sync_force_stop(val: bool):
+    """يضبط _force_stop محلياً وفي spider.safety معاً."""
     global _force_stop
-    if easing is None:
-        easing = _ease_func
-    starts = {k: current[k] for k in keys}
-    for step in range(1, steps + 1):
-        if _force_stop:
-            return
-        t = step / steps
-        t_eased = easing(t)
-        batch = {}
-        for k in keys:
-            if k in targets:
-                angle = starts[k] + (targets[k] - starts[k]) * t_eased
-                batch[k] = round(angle)
-        set_servos_batch(batch)  # ← قفل واحد بدل 18
-        time.sleep(delay)
+    _force_stop = val
+    set_force_stop(val)
 
 
-def get_leg_angles(leg_name, frame, params, gait_type='forward'):
-    """
-    حساب زوايا الرجل لأي فريم في دورة المشي.
-    يعيد dict مثل {"R0": 95, "R1": 110, "R2": 91}
-    يدعم أنواع حركة مختلفة عبر gait_type.
-    """
-    leg = params["legs"][leg_name]
-    total = params["total_frames"]
-    amp = params["coxa_amplitude"]
-    grp_a = params["groups"]["A"]
 
-    # offset نصف دورة للمجموعة B
-    offset = 0 if leg_name in grp_a else total // 2
-    f = (frame + offset) % total
-    half = total // 2
-    side = leg["side"]  # "R" أو "L"
-
-    # اتجاه Coxa: اليمين زيادة=أمام، اليسار نقصان=أمام
-    direction = 1 if side == "R" else -1
-
-    # ── تعديل الاتجاه حسب نوع الحركة ──
-    if gait_type == 'backward':
-        direction = -direction
-
-    if gait_type == 'turn_left':
-        if side == 'L':
-            direction = -direction
-
-    if gait_type == 'turn_right':
-        if side == 'R':
-            direction = -direction
-
-    # ── الانزياح والزحف الجانبي (Crab Walk) ──
-    # المبدأ: ندور الجسم بزاوية ونمشي أمام — الروبوت يمشي بشكل قطري
-    # هاد أفضل حل ممكن بدون IK — الـ Coxa بيحرك أمام/خلف فقط
-    coxa_angle_offset = 0
-
-    if gait_type == 'shift_left':
-        coxa_angle_offset = -18
-        amp = amp * 0.7
-    elif gait_type == 'shift_right':
-        coxa_angle_offset = 18
-        amp = amp * 0.7
-    elif gait_type == 'strafe_left' or gait_type == 'crab_walk':
-        coxa_angle_offset = -18
-    elif gait_type == 'strafe_right':
-        coxa_angle_offset = 18
-
-    # ── تعديل الارتفاع والأنماط ──
-    femur_lift_extra = 0
-    femur_stance_offset = 0
-    if gait_type == 'climb':
-        femur_lift_extra = 15
-    elif gait_type == 'prowl':
-        femur_stance_offset = 18
-        amp = amp * 0.5
-    elif gait_type == 'high_step':
-        femur_lift_extra = 25
-        amp = amp * 0.8
-    elif gait_type == 'glide':
-        femur_lift_extra = -(leg["femur_lift"] - leg["femur_stand"] - 8)
-        amp = int(amp * 1.15)
-
-    base_femur = leg["femur_stand"] + femur_stance_offset
-
-    if f < half:
-        # ── SWING phase ──────────────────────────────
-        progress = f / half  # 0.0 → 1.0
-        coxa = leg["coxa_stand"] + direction * (-amp + 2 * amp * progress) + coxa_angle_offset
-        femur = base_femur + (leg["femur_lift"] + femur_lift_extra - base_femur) \
-                * math.sin(progress * math.pi)
-    else:
-        # ── STANCE phase ─────────────────────────────
-        progress = (f - half) / half  # 0.0 → 1.0
-        coxa = leg["coxa_stand"] + direction * (amp - 2 * amp * progress) + coxa_angle_offset
-        femur = base_femur
-
-    tibia = leg["tibia"]  # ما بيتحرك
-
-    # بناء مفاتيح المحركات
-    legs_order = list(params["legs"].keys())
-    leg_idx = legs_order.index(leg_name)
-    if side == "R":
-        ch = leg_idx * 3
-    else:
-        ch = (leg_idx - 3) * 3
-
-    c_key = f"{side}{ch}"
-    f_key = f"{side}{ch+1}"
-    t_key = f"{side}{ch+2}"
-
-    return {
-        c_key: max(45, min(135, round(coxa))),
-        f_key: max(45, min(135, round(femur))),
-        t_key: max(45, min(135, round(tibia))),
-    }
 
 
 def execute_gait(params, speed, max_steps):
@@ -382,7 +182,7 @@ def execute_gait(params, speed, max_steps):
     actual_steps = max(3, int(base_steps / speed))
     actual_delay = max(0.01, base_delay / speed)
 
-    while gait_event.is_set() and (max_steps == 0 or gait_step_count < max_steps):
+    while gait_event.is_set() and not arbiter.in_estop() and (max_steps == 0 or gait_step_count < max_steps):
         # Phase 1: Group A swings forward, Group B pushes back
         gait_phase = "A"
         # Group A: stance -> lift -> swing_fwd
@@ -426,488 +226,22 @@ def execute_gait(params, speed, max_steps):
     gait_event.clear()
 
 
-def _load_gait_params(name="forward_tripod"):
-    """يحمّل خطة المشي من gait_params.json."""
-    try:
-        with open(GAIT_FILE) as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            for plan in data:
-                if plan.get("gait") == name:
-                    return plan
-        elif isinstance(data, dict) and data.get("gait") == name:
-            return data
-    except Exception:
-        pass
-    return None
 
-
-def _run_forward_gait(params, speed=1.0, max_cycles=0, gait_type='forward'):
-    """تنفيذ Forward Tripod Gait في thread خلفية."""
-    global gait_running, gait_step_count, gait_current_phase
-
-    # ── تعديلات خاصة لبعض أنواع الحركة ──
-    effective_speed = speed
-    if gait_type == 'creep':
-        effective_speed = speed * 0.3
-
-    delay = (params["frame_delay_ms"] / 1000.0) / effective_speed
-    s_steps = max(3, int(params["smooth_steps"] / effective_speed))
-    s_delay = max(0.01, params["smooth_delay"] / effective_speed)
-    total = params["total_frames"]
-    legs = list(params["legs"].keys())
-
-    frame = 0
-    cycles = 0
-
-    while gait_event.is_set():
-        if max_cycles > 0 and cycles >= max_cycles:
-            break
-
-        # حساب زوايا كل الأرجل لهذا الفريم
-        all_targets = {}
-        for leg in legs:
-            angles = get_leg_angles(leg, frame, params, gait_type=gait_type)
-            all_targets.update(angles)
-
-        # ── Balance correction للأرجل على الأرض (Tripod) ──
-        if balance.enabled:
-            grp_a = params["groups"]["A"]
-            half = total // 2
-            f_a = frame % total
-            # Group A بيرتفع بالنص الأول, Group B بالنص الثاني
-            for leg_name in legs:
-                leg = params["legs"][leg_name]
-                side = leg["side"]
-                legs_order = list(params["legs"].keys())
-                leg_idx = legs_order.index(leg_name)
-                if side == "R":
-                    ch = leg_idx * 3
-                else:
-                    ch = (leg_idx - 3) * 3
-                femur_key = f"{side}{ch+1}"
-                # هل الرجل بمرحلة swing؟
-                offset = 0 if leg_name in grp_a else half
-                f_leg = (f_a + offset) % total
-                is_swing = f_leg < half
-                if not is_swing and femur_key in all_targets:
-                    correction = balance.femur_offsets.get(leg_name, 0.0)
-                    all_targets[femur_key] = max(45, min(135, round(all_targets[femur_key] + correction)))
-
-        # تطبيق — كل الأرجل معاً
-        gait_current_phase = f"frame-{frame}"
-        smooth_move_leg(list(all_targets.keys()), all_targets, steps=s_steps, delay=s_delay)
-
-        frame += 1
-        if frame >= total:
-            frame = 0
-            cycles += 1
-            gait_step_count += 1
-
-        remaining = delay - s_steps * s_delay
-        time.sleep(max(0, remaining))
-
-    # إيقاف نظيف — ارجع لوضعية الوقوف
-    gait_current_phase = "returning"
-    stance_targets = {}
-    for leg_name, leg_data in params["legs"].items():
-        side = leg_data["side"]
-        leg_idx = list(params["legs"].keys()).index(leg_name)
-        if side == "R":
-            ch = leg_idx * 3
-        else:
-            ch = (leg_idx - 3) * 3
-        stance_targets[f"{side}{ch}"] = leg_data["coxa_stand"]
-        stance_targets[f"{side}{ch+1}"] = leg_data["femur_stand"]
-        stance_targets[f"{side}{ch+2}"] = leg_data["tibia"]
-
-    smooth_move_leg(list(stance_targets.keys()), stance_targets, steps=12, delay=0.03)
-    gait_current_phase = "idle"
-    gait_running = False
-    gait_event.clear()
 
 
 # ════════════════════════════════════════════════════════════════
-# ── Lateral Gait Engine (Tibia-based true lateral movement) ──
+# ── Balance System (من spider.balance) ──
 # ════════════════════════════════════════════════════════════════
+from spider.balance import BalanceController, SimplePID, BALANCE_WEIGHTS, LEG_FEMUR_CHANNEL
 
-def _run_lateral_gait(params, speed=1.0, max_cycles=0, direction='left'):
-    """
-    حركة جانبية حقيقية باستخدام مفصل الـ Tibia.
-    المبدأ: أثناء الـ Stance، الأرجل اليمنى تمد الـ Tibia (تدفع الجسم يسار)
-    والأرجل اليسرى تطوي الـ Tibia (تسحب الجسم يسار). والعكس لليمين.
-    """
-    global gait_running, gait_step_count, gait_current_phase
 
-    SHIFT_DEG = 14
-    LIFT_DEG = 14
-    total = 8
-    half = total // 2
-
-    delay = 0.10 / speed
-    s_steps = max(3, int(6 / speed))
-    s_delay = max(0.01, 0.02 / speed)
-
-    sign = 1 if direction == 'left' else -1
-
-    grp_a = params["groups"]["A"]
-    legs_all = list(params["legs"].keys())
-    legs_order = list(params["legs"].keys())
-
-    def _servo_keys(leg_name):
-        leg = params["legs"][leg_name]
-        side = leg["side"]
-        leg_idx = legs_order.index(leg_name)
-        if side == "R":
-            ch = leg_idx * 3
-        else:
-            ch = (leg_idx - 3) * 3
-        return f"{side}{ch}", f"{side}{ch+1}", f"{side}{ch+2}"
-
-    frame = 0
-    cycles = 0
-
-    while gait_event.is_set():
-        if max_cycles > 0 and cycles >= max_cycles:
-            break
-
-        all_targets = {}
-
-        for leg_name in legs_all:
-            leg = params["legs"][leg_name]
-            side = leg["side"]
-            c_key, f_key, t_key = _servo_keys(leg_name)
-
-            offset = 0 if leg_name in grp_a else half
-            f = (frame + offset) % total
-
-            lat_dir = (1 if side == 'R' else -1) * sign
-
-            if f < half:
-                progress = f / half
-                coxa = leg["coxa_stand"]
-                femur = leg["femur_stand"] + LIFT_DEG * math.sin(progress * math.pi)
-                tibia = leg["tibia"] + lat_dir * (SHIFT_DEG - 2 * SHIFT_DEG * progress)
-            else:
-                progress = (f - half) / half
-                coxa = leg["coxa_stand"]
-                femur = leg["femur_stand"]
-                tibia = leg["tibia"] + lat_dir * (-SHIFT_DEG + 2 * SHIFT_DEG * progress)
-
-            all_targets[c_key] = max(45, min(135, round(coxa)))
-            all_targets[f_key] = max(45, min(135, round(femur)))
-            all_targets[t_key] = max(45, min(135, round(tibia)))
-
-        if balance.enabled:
-            for leg_name in legs_all:
-                leg = params["legs"][leg_name]
-                side = leg["side"]
-                _, f_key, _ = _servo_keys(leg_name)
-                offset = 0 if leg_name in grp_a else half
-                f_leg = (frame + offset) % total
-                is_swing = f_leg < half
-                if not is_swing and f_key in all_targets:
-                    correction = balance.femur_offsets.get(leg_name, 0.0)
-                    all_targets[f_key] = max(45, min(135, round(all_targets[f_key] + correction)))
-
-        gait_current_phase = f"lateral-{frame}"
-        smooth_move_leg(list(all_targets.keys()), all_targets, steps=s_steps, delay=s_delay)
-
-        frame += 1
-        if frame >= total:
-            frame = 0
-            cycles += 1
-            gait_step_count += 1
-
-        remaining = delay - s_steps * s_delay
-        time.sleep(max(0, remaining))
-
-    gait_current_phase = "returning"
-    stance_targets = {}
-    for leg_name in legs_all:
-        leg = params["legs"][leg_name]
-        c_key, f_key, t_key = _servo_keys(leg_name)
-        stance_targets[c_key] = leg["coxa_stand"]
-        stance_targets[f_key] = leg["femur_stand"]
-        stance_targets[t_key] = leg["tibia"]
-
-    smooth_move_leg(list(stance_targets.keys()), stance_targets, steps=12, delay=0.03)
-    gait_current_phase = "idle"
-    gait_running = False
-    gait_event.clear()
-
-
-# ════════════════════════════════════════════════════════════════
-# ── Balance System (Gimbal Balance + PID) ──
-# ════════════════════════════════════════════════════════════════
-
-class SimplePID:
-    """PID controller بسيط مع anti-windup"""
-    def __init__(self, kp=0.8, ki=0.0, kd=0.3, output_limit=12.0):
-        self.kp = kp
-        self.ki = ki
-        self.kd = kd
-        self.output_limit = output_limit
-        self._prev_error = 0.0
-        self._integral = 0.0
-        self._last_time = None
-
-    def reset(self):
-        self._prev_error = 0.0
-        self._integral = 0.0
-        self._last_time = None
-
-    def update(self, error):
-        now = time.monotonic()
-        if self._last_time is None:
-            dt = 0.033  # ~30Hz افتراضي
-        else:
-            dt = now - self._last_time
-            dt = max(dt, 0.001)  # حماية من dt=0
-        self._last_time = now
-
-        # P
-        p_term = self.kp * error
-
-        # I مع anti-windup
-        self._integral += error * dt
-        if self.ki > 0:
-            max_integral = self.output_limit / self.ki
-            self._integral = max(-max_integral, min(max_integral, self._integral))
-        i_term = self.ki * self._integral
-
-        # D
-        derivative = (error - self._prev_error) / dt
-        d_term = self.kd * derivative
-        self._prev_error = error
-
-        # مجموع مع clamp
-        output = p_term + i_term + d_term
-        return max(-self.output_limit, min(self.output_limit, output))
-
-
-# ── أوزان توزيع التوازن لكل رجل ──
-BALANCE_WEIGHTS = {
-    # (roll_weight, pitch_weight)
-    "RF": (+0.5, -0.5),   # يمين أمامي
-    "RM": (+0.5,  0.0),   # يمين وسطي
-    "RR": (+0.5, +0.5),   # يمين خلفي
-    "LF": (-0.5, -0.5),   # يسار أمامي
-    "LM": (-0.5,  0.0),   # يسار وسطي
-    "LR": (-0.5, +0.5),   # يسار خلفي
-}
-
-# ── خريطة القنوات الكاملة ──
-LEG_COXA_CHANNEL = {
-    "RF": "R0", "RM": "R3", "RR": "R6",
-    "LF": "L0", "LM": "L3", "LR": "L6",
-}
-LEG_FEMUR_CHANNEL = {
-    "RF": "R1", "RM": "R4", "RR": "R7",
-    "LF": "L1", "LM": "L4", "LR": "L7",
-}
-LEG_TIBIA_CHANNEL = {
-    "RF": "R2", "RM": "R5", "RR": "R8",
-    "LF": "L2", "LM": "L5", "LR": "L8",
-}
-
-# اتجاه Femur (+1 = زيادة الزاوية تنزّل الرجل, -1 = العكس)
-FEMUR_DIRECTION = {
-    "RF": -1, "RM": -1, "RR": -1,
-    "LF": +1, "LM": +1, "LR": +1,
-}
-
-
-class BalanceController:
-    def __init__(self):
-        try:
-            with open(BALANCE_CONFIG_FILE) as f:
-                cfg = json.load(f)
-        except Exception:
-            cfg = {}
-
-        roll_cfg = cfg.get("roll_pid", {})
-        pitch_cfg = cfg.get("pitch_pid", {})
-
-        self.roll_pid = SimplePID(
-            kp=roll_cfg.get("kp", 0.8),
-            ki=roll_cfg.get("ki", 0.0),
-            kd=roll_cfg.get("kd", 0.3),
-            output_limit=cfg.get("max_correction", 12)
-        )
-        self.pitch_pid = SimplePID(
-            kp=pitch_cfg.get("kp", 0.8),
-            ki=pitch_cfg.get("ki", 0.0),
-            kd=pitch_cfg.get("kd", 0.3),
-            output_limit=cfg.get("max_correction", 12)
-        )
-
-        self.max_correction = cfg.get("max_correction", 12)
-        self.frequency = cfg.get("frequency_hz", 30)
-        self.smoothing_n = cfg.get("imu_smoothing_samples", 5)
-        self.deadzone = cfg.get("deadzone_deg", 1.5)
-
-        self.enabled = False
-        self._thread = None
-        self._stop_event = threading.Event()
-
-        # آخر قيم (للـ API)
-        self.last_roll = 0.0
-        self.last_pitch = 0.0
-        self.last_roll_correction = 0.0
-        self.last_pitch_correction = 0.0
-
-        # تاريخ للـ debug (آخر 100 عينة)
-        self.debug_history = []
-        self.MAX_HISTORY = 100
-
-        # IMU smoothing buffer
-        self._roll_buf = []
-        self._pitch_buf = []
-
-        # التصحيحات الحالية لكل رجل (يقرأها الـ gait engine)
-        self.femur_offsets = {leg: 0.0 for leg in BALANCE_WEIGHTS}
-
-        # آخر زوايا Femur أساسية (قبل التصحيح) — للوقوف
-        self._base_femur = {}
-
-    def start(self):
-        if self.enabled:
-            return
-        self.enabled = True
-        self._stop_event.clear()
-        self.roll_pid.reset()
-        self.pitch_pid.reset()
-        self._roll_buf.clear()
-        self._pitch_buf.clear()
-        # حفظ الزوايا الأساسية الحالية
-        self._base_femur = {leg: current[LEG_FEMUR_CHANNEL[leg]] for leg in BALANCE_WEIGHTS}
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        self.enabled = False
-        self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=2.0)
-            self._thread = None
-        # صفّر التصحيحات وارجع للزوايا الأساسية
-        for leg in BALANCE_WEIGHTS:
-            ch = LEG_FEMUR_CHANNEL[leg]
-            if ch in current:
-                base = self._base_femur.get(leg, current[ch])
-                set_servo(ch, base)
-        self.femur_offsets = {leg: 0.0 for leg in BALANCE_WEIGHTS}
-        self.last_roll_correction = 0.0
-        self.last_pitch_correction = 0.0
-
-    def _smooth(self, buf, new_val, n):
-        """Moving average بسيط"""
-        buf.append(new_val)
-        if len(buf) > n:
-            buf.pop(0)
-        return sum(buf) / len(buf)
-
-    def _loop(self):
-        interval = 1.0 / self.frequency
-        while not self._stop_event.is_set():
-            loop_start = time.monotonic()
-            try:
-                self._balance_tick()
-            except Exception as e:
-                print(f"[Balance] Error: {e}")
-            elapsed = time.monotonic() - loop_start
-            sleep_time = interval - elapsed
-            if sleep_time > 0:
-                self._stop_event.wait(sleep_time)
-
-    def _balance_tick(self):
-        # 1. اقرأ IMU — read_bno_single بياخد bno_lock داخلياً
-        imu = read_bno_single()
-
-        if imu is None:
-            return
-
-        raw_roll = imu["roll"]
-        raw_pitch = imu["pitch"]
-
-        # 2. Smoothing
-        roll = self._smooth(self._roll_buf, raw_roll, self.smoothing_n)
-        pitch = self._smooth(self._pitch_buf, raw_pitch, self.smoothing_n)
-
-        self.last_roll = round(roll, 2)
-        self.last_pitch = round(pitch, 2)
-
-        # 3. Deadzone — تجاهل الانحرافات الصغيرة
-        error_roll = 0.0 if abs(roll) < self.deadzone else -roll
-        error_pitch = 0.0 if abs(pitch) < self.deadzone else -pitch
-
-        # 4. PID
-        corr_roll = self.roll_pid.update(error_roll)
-        corr_pitch = self.pitch_pid.update(error_pitch)
-
-        self.last_roll_correction = round(corr_roll, 2)
-        self.last_pitch_correction = round(corr_pitch, 2)
-
-        # 5. وزّع على الأرجل
-        for leg, (rw, pw) in BALANCE_WEIGHTS.items():
-            offset = (corr_roll * rw + corr_pitch * pw)
-            direction = FEMUR_DIRECTION[leg]
-            self.femur_offsets[leg] = round(offset * direction, 1)
-
-        # 6. طبّق التصحيح (فقط إذا ما في مشي شغّال)
-        if not gait_event.is_set():
-            self._apply_corrections()
-
-        # 7. سجّل للـ debug
-        entry = {
-            "t": round(time.monotonic(), 3),
-            "roll": self.last_roll,
-            "pitch": self.last_pitch,
-            "corr_r": self.last_roll_correction,
-            "corr_p": self.last_pitch_correction,
-        }
-        self.debug_history.append(entry)
-        if len(self.debug_history) > self.MAX_HISTORY:
-            self.debug_history.pop(0)
-
-    def _apply_corrections(self):
-        """طبّق التصحيحات على السيرفوهات — للوقوف فقط"""
-        for leg, offset in self.femur_offsets.items():
-            ch = LEG_FEMUR_CHANNEL[leg]
-            base = self._base_femur.get(leg, 90)
-            target = base + offset
-            # حدود أمان
-            target = max(50, min(130, target))
-            set_servo(ch, round(target))
-
-    def tune(self, kp=None, ki=None, kd=None, axis="both"):
-        """ضبط PID أثناء العمل"""
-        pids = []
-        if axis in ("both", "roll"):
-            pids.append(self.roll_pid)
-        if axis in ("both", "pitch"):
-            pids.append(self.pitch_pid)
-        for pid in pids:
-            if kp is not None: pid.kp = kp
-            if ki is not None: pid.ki = ki
-            if kd is not None: pid.kd = kd
-
-    def get_status(self):
-        return {
-            "enabled": self.enabled,
-            "roll": self.last_roll,
-            "pitch": self.last_pitch,
-            "roll_correction": self.last_roll_correction,
-            "pitch_correction": self.last_pitch_correction,
-            "femur_offsets": self.femur_offsets,
-            "pid_roll": {"kp": self.roll_pid.kp, "ki": self.roll_pid.ki, "kd": self.roll_pid.kd},
-            "pid_pitch": {"kp": self.pitch_pid.kp, "ki": self.pitch_pid.ki, "kd": self.pitch_pid.kd},
-        }
-
-
-# ── إنشاء الـ controller ──
+# ── إنشاء الـ balance controller (مع حقن dependencies) ──
 balance = BalanceController()
+balance.configure(
+    set_servo_fn=lambda ch, angle: set_servo(ch, angle),
+    current_ref=current,
+    gait_event_ref=gait_event,
+)
 
 
 # ── Routes ──
@@ -1007,39 +341,50 @@ def api_calibrate():
 
 @app.route("/api/off", methods=["POST"])
 def api_off():
-    global gait_running, _force_stop
-    try:
-        _force_stop = True
-        gait_running = False
-        gait_event.clear()
-        time.sleep(0.1)
-    finally:
-        _force_stop = False  # ← مضمون التنفيذ
+    """إطفاء نظيف: وقوف على _STAND (مفاتيح صحيحة) ثم تصفير PWM."""
+    global gait_running
+    _sync_force_stop(True)
+    gait_running = False
+    gait_event.clear()
+    time.sleep(0.1)
+    _sync_force_stop(False)
 
     if HARDWARE:
         try:
-            # 2. رجّع لوضعية التوازن أولاً (حركة سلسة)
-            stance = dict(DEFAULT_RIGHT)
-            stance.update(DEFAULT_LEFT)
-            targets = {}
-            for ch, angle in stance.items():
-                if ch <= 8:
-                    targets[f"R{ch}"] = angle
-                else:
-                    targets[f"L{ch-9}"] = angle
-            smooth_move_leg(list(targets.keys()), targets, steps=8, delay=0.03)
+            # ارجع لوضعية الوقوف الصحيحة عبر _STAND (R0..R8, L0..L8 — مفاتيح صحيحة)
+            smooth_move_leg(list(_STAND.keys()), _STAND, steps=8, delay=0.03)
             time.sleep(0.1)
         except Exception:
             pass
-
         try:
-            # 3. ضبط كل القنوات لـ 0 — يوقف PWM بدون رجفة
-            for ch in range(16):
-                right_pca._pca.channels[ch].duty_cycle = 0
-                left_pca._pca.channels[ch].duty_cycle = 0
+            # صفّر PWM — ترخية السيرفوات
+            from spider.hardware import pwm_release_all
+            pwm_release_all()
         except Exception:
             pass
-    return jsonify({"ok": True, "msg": "Balanced stance then servos off"})
+    return jsonify({"ok": True, "msg": "Stance then servos off"})
+
+
+# ── الإيقاف الطارئ البرمجي ──
+@app.route("/api/estop", methods=["POST"])
+def api_estop():
+    """إيقاف طارئ فوري: يوقف كل threads الحركة + يصفّر PWM (ترخية السيرفوات)."""
+    global gait_running, _force_stop
+    _force_stop = True
+    gait_running = False
+    gait_event.clear()          # أوقف حلقات المشي
+    balance.stop()              # أوقف التوازن لو شغّال
+    arbiter.emergency_stop()    # يصفّر PWM + يفرّغ الأهداف + يمنع أي كتابة جديدة
+    return jsonify({"ok": True, "estop": True})
+
+
+@app.route("/api/estop/clear", methods=["POST"])
+def api_estop_clear():
+    """إلغاء الطوارئ: يعيد المحكّم للعمل بهدف=الوضع الحالي (لا حركة مفاجئة)."""
+    global _force_stop
+    _force_stop = False
+    arbiter.clear_estop()
+    return jsonify({"ok": True, "estop": False})
 
 
 # ── Per-Leg Default Routes ──
@@ -1386,137 +731,7 @@ def api_gait_status():
     })
 
 
-# ── Ripple Gait (مشي العنكبوت المتناغم) ──
-RIPPLE_PARAMS_FILE = os.path.join(BASE_DIR, "ripple_gait_params.json")
 
-def _load_ripple_params():
-    """يحمّل بيانات Ripple Gait."""
-    try:
-        with open(RIPPLE_PARAMS_FILE) as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def _run_ripple_gait(params, speed=1.0, max_cycles=0, direction='forward'):
-    """تنفيذ Ripple Gait — رجل واحدة بالهوا بالتسلسل."""
-    global gait_running, gait_step_count, gait_current_phase
-
-    RIPPLE_ORDER = params.get("RIPPLE_ORDER", ["RR", "RM", "RF", "LR", "LM", "LF"])
-    LIFT_DEG  = params.get("LIFT_DEG", 14)
-    SWING_DEG = params.get("SWING_DEG", 20)
-    TOTAL_FRAMES = params.get("total_frames", 60)
-
-    delay = (params.get("frame_delay_ms", 20) / 1000.0) / speed
-    frame = 0
-    cycles = 0
-
-    # تحضير lookup لقنوات كل رجل
-    legs_order = list(params["legs"].keys())
-
-    while gait_event.is_set():
-        if max_cycles > 0 and cycles >= max_cycles:
-            break
-
-        t_global = frame / TOTAL_FRAMES  # 0.0 → 1.0
-
-        all_targets = {}
-        for idx, leg_name in enumerate(RIPPLE_ORDER):
-            leg = params["legs"][leg_name]
-            side = leg["side"]
-
-            # اتجاه الحركة
-            coxa_body_offset = 0
-            if direction == 'strafe_left':
-                coxa_body_offset = -18
-                sign = 1 if side == "R" else -1
-            elif direction == 'strafe_right':
-                coxa_body_offset = 18
-                sign = 1 if side == "R" else -1
-            elif direction == 'turn_left':
-                sign = 1 if side == "R" else -1
-            elif direction == 'turn_right':
-                sign = -1 if side == "R" else 1
-            else:
-                sign = 1 if side == "R" else -1
-                if direction == 'backward':
-                    sign = -sign
-
-            # Phase مع إزاحة لكل رجل
-            leg_phase = (t_global + idx / len(RIPPLE_ORDER)) % 1.0
-
-            # ── Displacement-based gait ──
-            # Duty factor: كل رجل عالأرض 5/6 من الوقت
-            DUTY = 5.0 / 6.0
-            SWING_FRAC = 1.0 - DUTY  # 1/6
-
-            if leg_phase < SWING_FRAC:
-                # === SWING (القدم بالهوا — تنتقل من الخلف للأمام) ===
-                swing_t = leg_phase / SWING_FRAC  # 0→1
-                swing_t_ease = ease_smoothstep(swing_t)
-
-                # Coxa: من الخلف للأمام
-                coxa_offset = (-SWING_DEG/2 + SWING_DEG * swing_t_ease) * sign
-                # Femur: رفع القدم (قوس)
-                lift = LIFT_DEG * math.sin(math.pi * swing_t)
-            else:
-                # === STANCE (القدم عالأرض — تدفع الجسم للأمام) ===
-                stance_t = (leg_phase - SWING_FRAC) / DUTY  # 0→1
-                stance_t_ease = ease_smoothstep(stance_t)
-
-                # Coxa: من الأمام للخلف (دفع)
-                coxa_offset = (SWING_DEG/2 - SWING_DEG * stance_t_ease) * sign
-                # Femur: على الأرض
-                lift = 0
-
-            coxa  = leg["coxa_stand"]  + coxa_offset + coxa_body_offset
-            femur = leg["femur_stand"] + lift
-            tibia = leg["tibia"]       - lift * 0.4
-
-            # ── Balance correction — فقط للأرجل على الأرض ──
-            if balance.enabled and lift < 0.5:
-                femur += balance.femur_offsets.get(leg_name, 0.0)
-
-            # حساب القنوات
-            leg_idx = legs_order.index(leg_name)
-            if side == "R":
-                ch = leg_idx * 3
-            else:
-                ch = (leg_idx - 3) * 3
-
-            all_targets[f"{side}{ch}"]   = max(45, min(135, round(coxa)))
-            all_targets[f"{side}{ch+1}"] = max(45, min(135, round(femur)))
-            all_targets[f"{side}{ch+2}"] = max(45, min(135, round(tibia)))
-
-        gait_current_phase = f"ripple-{frame}"
-        smooth_move_leg(list(all_targets.keys()), all_targets, steps=3, delay=0.01)
-
-        frame += 1
-        if frame >= TOTAL_FRAMES:
-            frame = 0
-            cycles += 1
-            gait_step_count += 1
-
-        time.sleep(delay)
-
-    # إيقاف نظيف — ارجع لوضعية الوقوف
-    gait_current_phase = "returning"
-    stance_targets = {}
-    for leg_name, leg_data in params["legs"].items():
-        side = leg_data["side"]
-        leg_idx = list(params["legs"].keys()).index(leg_name)
-        if side == "R":
-            ch = leg_idx * 3
-        else:
-            ch = (leg_idx - 3) * 3
-        stance_targets[f"{side}{ch}"]   = leg_data["coxa_stand"]
-        stance_targets[f"{side}{ch+1}"] = leg_data["femur_stand"]
-        stance_targets[f"{side}{ch+2}"] = leg_data["tibia"]
-
-    smooth_move_leg(list(stance_targets.keys()), stance_targets, steps=12, delay=0.03)
-    gait_current_phase = "idle"
-    gait_running = False
-    gait_event.clear()
 
 
 @app.route("/api/gait/ripple/start", methods=["POST"])
@@ -1547,12 +762,26 @@ def ripple_gait_start():
         gait_thread = threading.Thread(
             target=_run_lateral_gait,
             args=(tripod_params or params, speed, max_cycles, lat_dir),
+            kwargs={
+                "gait_event": gait_event,
+                "gait_running_ref": GlobalRef("gait_running"),
+                "balance": balance,
+                "step_counter_ref": GlobalRef("gait_step_count"),
+                "phase_ref": GlobalRef("gait_current_phase")
+            },
             daemon=True
         )
     else:
         gait_thread = threading.Thread(
             target=_run_ripple_gait,
             args=(params, speed, max_cycles, direction),
+            kwargs={
+                "gait_event": gait_event,
+                "gait_running_ref": GlobalRef("gait_running"),
+                "balance": balance,
+                "step_counter_ref": GlobalRef("gait_step_count"),
+                "phase_ref": GlobalRef("gait_current_phase")
+            },
             daemon=True
         )
     gait_thread.start()
@@ -1610,12 +839,26 @@ def gait_forward_start():
         gait_thread = threading.Thread(
             target=_run_lateral_gait,
             args=(params, speed, max_cycles, lateral_types[gait_type]),
+            kwargs={
+                "gait_event": gait_event,
+                "gait_running_ref": GlobalRef("gait_running"),
+                "balance": balance,
+                "step_counter_ref": GlobalRef("gait_step_count"),
+                "phase_ref": GlobalRef("gait_current_phase")
+            },
             daemon=True
         )
     else:
         gait_thread = threading.Thread(
             target=_run_forward_gait,
             args=(params, speed, max_cycles, gait_type),
+            kwargs={
+                "gait_event": gait_event,
+                "gait_running_ref": GlobalRef("gait_running"),
+                "balance": balance,
+                "step_counter_ref": GlobalRef("gait_step_count"),
+                "phase_ref": GlobalRef("gait_current_phase")
+            },
             daemon=True
         )
     gait_thread.start()
@@ -1669,12 +912,26 @@ def gait_once():
         gait_thread = threading.Thread(
             target=_run_lateral_gait,
             args=(params, speed, cycles, lateral_types[gait_type]),
+            kwargs={
+                "gait_event": gait_event,
+                "gait_running_ref": GlobalRef("gait_running"),
+                "balance": balance,
+                "step_counter_ref": GlobalRef("gait_step_count"),
+                "phase_ref": GlobalRef("gait_current_phase")
+            },
             daemon=True
         )
     else:
         gait_thread = threading.Thread(
             target=_run_forward_gait,
             args=(params, speed, cycles, gait_type),
+            kwargs={
+                "gait_event": gait_event,
+                "gait_running_ref": GlobalRef("gait_running"),
+                "balance": balance,
+                "step_counter_ref": GlobalRef("gait_step_count"),
+                "phase_ref": GlobalRef("gait_current_phase")
+            },
             daemon=True
         )
     gait_thread.start()
@@ -1689,633 +946,51 @@ for ch, angle in DEFAULT_LEFT.items():
     _STAND[f"L{ch}"] = angle
 
 
-# ── Body Move Endpoint ──
+# ── Body Move Endpoint (محمي بالتحكيم — ثغرة #1) ──
 @app.route("/api/body/move", methods=["POST"])
 def body_move():
-    """
-    يحرّك الجسم بتغيير Femur أو Coxa لكل الأرجل معاً.
-    لا يتضمن locomotion — الأرجل تبقى على الأرض.
-    """
+    """يحرّك الجسم بتغيير Femur أو Coxa — الأرجل تبقى على الأرض."""
+    from spider.moves import get_body_targets, run_body
     data  = request.json or {}
     move  = data.get('move', 'stand')
     speed = float(data.get('speed', 1.0))
 
-    base = dict(_STAND)
-
-    BODY_DELTA = 12  # درجات التعديل
-
-    moves = {
-        # ارتفاع: كل Femur ترتفع قليلاً (قيمة أكبر = أعلى)
-        'body_up':      {k: base[k] - BODY_DELTA if k[1] in ('1','4','7') else base[k]
-                         for k in base},
-        # انخفاض: كل Femur تنزل
-        'body_down':    {k: base[k] + BODY_DELTA if k[1] in ('1','4','7') else base[k]
-                         for k in base},
-        # ميل أمام: الأرجل الأمامية ترتفع، الخلفية تنزل
-        'lean_forward': {**base,
-                         'R1': base['R1'] + BODY_DELTA, 'L1': base['L1'] + BODY_DELTA,
-                         'R7': base['R7'] - BODY_DELTA, 'L7': base['L7'] - BODY_DELTA},
-        # ميل خلف
-        'lean_back':    {**base,
-                         'R1': base['R1'] - BODY_DELTA, 'L1': base['L1'] - BODY_DELTA,
-                         'R7': base['R7'] + BODY_DELTA, 'L7': base['L7'] + BODY_DELTA},
-        # ميل يسار: اليسار يرتفع، اليمين ينزل
-        'lean_left':    {**base,
-                         'L1': base['L1'] + BODY_DELTA, 'L4': base['L4'] + BODY_DELTA, 'L7': base['L7'] + BODY_DELTA,
-                         'R1': base['R1'] - BODY_DELTA, 'R4': base['R4'] - BODY_DELTA, 'R7': base['R7'] - BODY_DELTA},
-        # ميل يمين
-        'lean_right':   {**base,
-                         'R1': base['R1'] + BODY_DELTA, 'R4': base['R4'] + BODY_DELTA, 'R7': base['R7'] + BODY_DELTA,
-                         'L1': base['L1'] - BODY_DELTA, 'L4': base['L4'] - BODY_DELTA, 'L7': base['L7'] - BODY_DELTA},
-        # لي يسار: الأرجل الأمامية تدور يمين، الخلفية يسار (Coxa)
-        'twist_left':   {**base,
-                         'R0': base['R0'] + BODY_DELTA, 'L0': base['L0'] - BODY_DELTA,
-                         'R6': base['R6'] - BODY_DELTA, 'L6': base['L6'] + BODY_DELTA},
-        # لي يمين
-        'twist_right':  {**base,
-                         'R0': base['R0'] - BODY_DELTA, 'L0': base['L0'] + BODY_DELTA,
-                         'R6': base['R6'] + BODY_DELTA, 'L6': base['L6'] - BODY_DELTA},
-        # وقوف — الرجوع للوضعية الأساسية
-        'stand':        dict(base),
-    }
-
-    if move not in moves:
+    targets_raw = get_body_targets(move)
+    if targets_raw is None:
         return jsonify({'ok': False, 'error': f'unknown move: {move}'})
 
-    targets = {k: max(45, min(135, v)) for k, v in moves[move].items()}
+    targets = {k: max(45, min(135, v)) for k, v in targets_raw.items()}
     steps   = max(4, int(10 / speed))
     delay   = max(0.01, 0.03 / speed)
-    smooth_move_leg(list(targets.keys()), targets, steps=steps, delay=delay)
 
+    if not run_body(move, targets, steps, delay):
+        return jsonify({'ok': False, 'error': 'busy — أوقف المشي أولاً'}), 409
     return jsonify({'ok': True, 'move': move})
 
 
 # ── Special Move Functions ──────────────────────────────
 
-def _move_wave(speed=1.0):
-    """تلويح — RF ترتفع وتتأرجح يمين يسار 3 مرات."""
-    s  = max(4, int(8 / speed))
-    dl = max(0.01, 0.02 / speed)
-    # ارفع RF
-    smooth_move_leg(['R0','R1','R2'], {'R0':90,'R1':119,'R2':101}, steps=s, delay=dl)
-    for _ in range(3):
-        smooth_move_leg(['R0'], {'R0':115}, steps=s, delay=dl)
-        smooth_move_leg(['R0'], {'R0':65},  steps=s, delay=dl)
-    # أنزل RF
-    smooth_move_leg(['R0','R1','R2'], _STAND, steps=s, delay=dl)
 
 
-def _move_dance(speed=1.0):
-    """رقص — تأرجح الجسم يمين/يسار مع رفع أرجل متناوبة."""
-    s  = max(3, int(6 / speed))
-    dl = max(0.01, 0.02 / speed)
-    for _ in range(2):
-        # ميل يمين + رفع RF
-        smooth_move_leg(
-            ['R1','R4','R7','L1','L4','L7','R0','R1'],
-            {'R1':77,'R4':67,'R7':75,'L1':44,'L4':64,'L7':54,'R0':110},
-            steps=s, delay=dl
-        )
-        time.sleep(0.1)
-        # ميل يسار + رفع LF
-        smooth_move_leg(
-            ['R1','R4','R7','L1','L4','L7','L0','L1'],
-            {'R1':57,'R4':47,'R7':55,'L1':64,'L4':84,'L7':74,'L0':70},
-            steps=s, delay=dl
-        )
-        time.sleep(0.1)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=8, delay=0.03)
 
-
-def _move_shake(speed=1.0):
-    """مصافحة — RF تمتد للأمام وتهتز."""
-    s  = max(4, int(8 / speed))
-    dl = max(0.01, 0.02 / speed)
-    smooth_move_leg(['R0','R1','R2'], {'R0':125,'R1':90,'R2':70}, steps=s, delay=dl)
-    for _ in range(3):
-        smooth_move_leg(['R1'], {'R1':100}, steps=3, delay=0.02)
-        smooth_move_leg(['R1'], {'R1':80},  steps=3, delay=0.02)
-    smooth_move_leg(['R0','R1','R2'], _STAND, steps=s, delay=dl)
-
-
-def _move_salute(speed=1.0):
-    """تحية — RF ترتفع وتلمس الجانب الأيمن للجسم."""
-    s  = max(5, int(10 / speed))
-    dl = max(0.01, 0.03 / speed)
-    smooth_move_leg(['R0','R1','R2'], {'R0':60,'R1':125,'R2':130}, steps=s, delay=dl)
-    time.sleep(0.5 / speed)
-    smooth_move_leg(['R0','R1','R2'], _STAND, steps=s, delay=dl)
-
-
-def _move_roar(speed=1.0):
-    """تهديد — كل الأرجل الأمامية ترتفع والجسم ينخفض."""
-    s  = max(4, int(8 / speed))
-    dl = max(0.01, 0.02 / speed)
-    # الجسم ينخفض
-    low = {k: v-10 if k in ('R1','R4','R7','L1','L4','L7') else v for k,v in _STAND.items()}
-    smooth_move_leg(list(low.keys()), low, steps=s, delay=dl)
-    # الأرجل الأمامية ترتفع
-    smooth_move_leg(['R0','R1','L0','L1'], {'R0':130,'R1':119,'L0':50,'L1':127}, steps=s, delay=dl)
-    time.sleep(0.4 / speed)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=8, delay=0.03)
-
-
-def _move_spin(speed=1.0):
-    """دوران كامل 360° — 8 دورات turn_right."""
-    params = _load_gait_params('forward_tripod')
-    if params:
-        global gait_running
-        gait_running = True
-        gait_event.set()
-        _run_forward_gait(params, speed * 1.2, 8, 'turn_right')
-
-
-def _move_bow(speed=1.0):
-    """انحناء — الأرجل الأمامية ترفع الجسم، الخلفية تنخفض."""
-    s  = max(5, int(10 / speed))
-    dl = max(0.01, 0.03 / speed)
-    bow = {**_STAND,
-           'R1': _STAND['R1'] + 20, 'L1': _STAND['L1'] + 20,   # أمام ترتفع
-           'R7': _STAND['R7'] - 15, 'L7': _STAND['L7'] - 15}   # خلف تنزل
-    smooth_move_leg(list(bow.keys()), bow, steps=s, delay=dl)
-    time.sleep(0.6 / speed)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=s, delay=dl)
-
-
-def _move_stretch(speed=1.0):
-    """تمدد — كل الأرجل تمتد للخارج إلى أقصى مدى."""
-    s  = max(5, int(10 / speed))
-    dl = max(0.01, 0.03 / speed)
-    stretch = {**_STAND,
-               'R0':70,'R3':70,'R6':70,
-               'L0':110,'L3':110,'L6':110,
-               'R1':_STAND['R1']-10,'R4':_STAND['R4']-10,'R7':_STAND['R7']-10,
-               'L1':_STAND['L1']-10,'L4':_STAND['L4']-10,'L7':_STAND['L7']-10}
-    smooth_move_leg(list(stretch.keys()), stretch, steps=s, delay=dl)
-    time.sleep(0.5 / speed)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=s, delay=dl)
-
-
-def _move_idle_sway(speed=1.0):
-    """تأرجح خفيف — حركة هادئة للاسترخاء (5 دورات)."""
-    s  = max(6, int(12 / speed))
-    dl = max(0.02, 0.04 / speed)
-    for _ in range(5):
-        sway_r = {**_STAND,
-                  'R1':_STAND['R1']+8,'R4':_STAND['R4']+8,'R7':_STAND['R7']+8,
-                  'L1':_STAND['L1']-8,'L4':_STAND['L4']-8,'L7':_STAND['L7']-8}
-        sway_l = {**_STAND,
-                  'L1':_STAND['L1']+8,'L4':_STAND['L4']+8,'L7':_STAND['L7']+8,
-                  'R1':_STAND['R1']-8,'R4':_STAND['R4']-8,'R7':_STAND['R7']-8}
-        smooth_move_leg(list(sway_r.keys()), sway_r, steps=s, delay=dl)
-        smooth_move_leg(list(sway_l.keys()), sway_l, steps=s, delay=dl)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=s, delay=dl)
-
-
-def _move_wake_up(speed=1.0):
-    """إيقاظ — ينزل ببطء من وضعية نوم لوضعية وقوف."""
-    s  = max(8, int(15 / speed))
-    dl = max(0.02, 0.04 / speed)
-    sleep_pos = {k: v + 40 if k[1] in ('1','4','7') else v for k,v in _STAND.items()}
-    smooth_move_leg(list(_STAND.keys()), sleep_pos, steps=2, delay=0.01)  # إلى النوم أولاً
-    smooth_move_leg(list(_STAND.keys()), _STAND,    steps=s, delay=dl)    # ثم إيقاظ بطيء
-
-
-def _move_sleep_pose(speed=1.0):
-    """وضعية نوم — تنخفض الأرجل لينام الجسم على الأرض."""
-    s  = max(8, int(15 / speed))
-    dl = max(0.02, 0.04 / speed)
-    sleep_pos = {k: v + 40 if k[1] in ('1','4','7') else v for k,v in _STAND.items()}
-    smooth_move_leg(list(sleep_pos.keys()), sleep_pos, steps=s, delay=dl)
-
-
-def _move_flatten(speed=1.0):
-    """تسطيح — الجسم ينزل ببطء شديد حتى يلامس الأرض (3 مراحل)."""
-    s = max(20, int(40 / speed))
-    dl = max(0.03, 0.05 / speed)
-
-    mid = {}
-    for k, v in _STAND.items():
-        if k[1] in ('1','4','7'):
-            mid[k] = v + 20
-        else:
-            mid[k] = v
-    smooth_move_leg(list(mid.keys()), mid, steps=s, delay=dl)
-
-    low = {}
-    for k, v in _STAND.items():
-        if k[1] in ('1','4','7'):
-            low[k] = v + 40
-        elif k[1] in ('0','3','6'):
-            low[k] = max(55, v - 15) if k[0] == 'R' else min(125, v + 15)
-        else:
-            low[k] = v
-    smooth_move_leg(list(low.keys()), low, steps=s, delay=dl)
-
-    flat = {}
-    for k, v in _STAND.items():
-        ch = k[1]
-        if ch in ('1','4','7'):
-            flat[k] = min(130, v + 58)
-        elif ch in ('0','3','6'):
-            flat[k] = max(55, v - 25) if k[0] == 'R' else min(125, v + 25)
-        elif ch in ('2','5','8'):
-            flat[k] = max(50, v - 25)
-        else:
-            flat[k] = v
-    smooth_move_leg(list(flat.keys()), flat, steps=s, delay=dl)
-
-
-def _move_push_up(speed=1.0):
-    """ضغط — 3 تمارين ضغط."""
-    s_down = max(8, int(15 / speed))
-    s_up = max(6, int(10 / speed))
-    dl = max(0.02, 0.03 / speed)
-    down = {k: v + 30 if k[1] in ('1','4','7') else v for k, v in _STAND.items()}
-    for _ in range(3):
-        smooth_move_leg(list(down.keys()), down, steps=s_down, delay=dl)
-        time.sleep(0.15 / speed)
-        smooth_move_leg(list(_STAND.keys()), _STAND, steps=s_up, delay=dl)
-        time.sleep(0.15 / speed)
-
-
-def _move_tippy_toes(speed=1.0):
-    """على الأطراف — الجسم يرتفع لأقصى ارتفاع."""
-    s = max(12, int(20 / speed))
-    dl = max(0.02, 0.04 / speed)
-    high = {}
-    for k, v in _STAND.items():
-        if k[1] in ('1','4','7'):
-            high[k] = max(45, v - 15)
-        elif k[1] in ('2','5','8'):
-            high[k] = max(50, v - 10)
-        else:
-            high[k] = v
-    smooth_move_leg(list(high.keys()), high, steps=s, delay=dl)
-    time.sleep(1.0 / speed)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=s, delay=dl)
-
-
-def _move_look_around(speed=1.0):
-    """تلفت — الجسم يدور ببطء يمين ويسار كأنه يتفقد المحيط."""
-    s = max(8, int(15 / speed))
-    dl = max(0.02, 0.04 / speed)
-    look_l = {**_STAND,
-              'R0': _STAND['R0'] + 20, 'L0': _STAND['L0'] - 20,
-              'R3': _STAND['R3'] + 10, 'L3': _STAND['L3'] - 10,
-              'R6': _STAND['R6'] - 15, 'L6': _STAND['L6'] + 15}
-    smooth_move_leg(list(look_l.keys()), look_l, steps=s, delay=dl)
-    time.sleep(0.5 / speed)
-    look_r = {**_STAND,
-              'R0': _STAND['R0'] - 20, 'L0': _STAND['L0'] + 20,
-              'R3': _STAND['R3'] - 10, 'L3': _STAND['L3'] + 10,
-              'R6': _STAND['R6'] + 15, 'L6': _STAND['L6'] - 15}
-    smooth_move_leg(list(look_r.keys()), look_r, steps=s, delay=dl)
-    time.sleep(0.5 / speed)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=s, delay=dl)
-
-
-def _move_pounce(speed=1.0):
-    """انقضاض — ينخفض ويتحفز ثم يقفز للأمام."""
-    dl = max(0.01, 0.03 / speed)
-    crouch = {}
-    for k, v in _STAND.items():
-        if k[1] in ('1','4','7'):
-            crouch[k] = v + 25
-        else:
-            crouch[k] = v
-    smooth_move_leg(list(crouch.keys()), crouch, steps=max(10, int(18/speed)), delay=dl)
-    time.sleep(0.4 / speed)
-    spring = {**_STAND,
-              'R0': 120, 'L0': 60,
-              'R1': max(45, _STAND['R1'] - 10), 'L1': max(45, _STAND['L1'] - 10),
-              'R7': max(45, _STAND['R7'] - 10), 'L7': max(45, _STAND['L7'] - 10)}
-    smooth_move_leg(list(spring.keys()), spring, steps=max(3, int(5/speed)), delay=0.01)
-    time.sleep(0.3 / speed)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=max(10, int(15/speed)), delay=dl)
-
-
-def _move_stomp(speed=1.0):
-    """دوس — ضرب الأرجل بالأرض بالتناوب."""
-    s = max(3, int(5 / speed))
-    dl = max(0.01, 0.02 / speed)
-    legs_f = ['R1', 'L1', 'R7', 'L7', 'R4', 'L4']
-    for fk in legs_f:
-        lift_t = {fk: _STAND[fk] + 35}
-        smooth_move_leg([fk], lift_t, steps=s, delay=dl)
-        slam_t = {fk: max(45, _STAND[fk] - 8)}
-        smooth_move_leg([fk], slam_t, steps=2, delay=0.008)
-        time.sleep(0.04)
-        smooth_move_leg([fk], {fk: _STAND[fk]}, steps=s, delay=dl)
-    time.sleep(0.1)
-
-
-def _move_scared(speed=1.0):
-    """خوف — انسحاب سريع ثم انكماش ثم تعافي بطيء."""
-    dl = max(0.01, 0.02 / speed)
-    jump = {}
-    for k, v in _STAND.items():
-        if k[1] in ('0','3','6'):
-            jump[k] = max(55, v - 20) if k[0] == 'R' else min(125, v + 20)
-        else:
-            jump[k] = v
-    smooth_move_leg(list(jump.keys()), jump, steps=3, delay=0.01)
-    curl = dict(jump)
-    for k in curl:
-        if k[1] in ('1','4','7'):
-            curl[k] = _STAND[k] + 30
-    smooth_move_leg(list(curl.keys()), curl, steps=max(5, int(8/speed)), delay=dl)
-    time.sleep(0.8 / speed)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=max(12, int(20/speed)), delay=0.03)
-
-
-def _move_dizzy(speed=1.0):
-    """دوخة — تأرجح عشوائي كأن الروبوت فقد توازنه."""
-    import random
-    s = max(4, int(7 / speed))
-    dl = max(0.01, 0.02 / speed)
-    for _ in range(6):
-        w = {}
-        for k, v in _STAND.items():
-            if k[1] in ('1','4','7'):
-                w[k] = max(50, min(130, v + random.randint(-10, 18)))
-            elif k[1] in ('0','3','6'):
-                w[k] = max(50, min(130, v + random.randint(-18, 18)))
-            else:
-                w[k] = v
-        smooth_move_leg(list(w.keys()), w, steps=s, delay=dl)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=8, delay=0.03)
-
-
-def _move_wiggle(speed=1.0):
-    """هز — الجزء الخلفي يتأرجح يمين ويسار."""
-    s = max(4, int(7 / speed))
-    dl = max(0.01, 0.02 / speed)
-    for _ in range(4):
-        wr = {**_STAND,
-              'R6': _STAND['R6'] + 20, 'L6': _STAND['L6'] - 20,
-              'R7': _STAND['R7'] + 8,  'L7': _STAND['L7'] - 8}
-        smooth_move_leg(list(wr.keys()), wr, steps=s, delay=dl)
-        wl = {**_STAND,
-              'R6': _STAND['R6'] - 20, 'L6': _STAND['L6'] + 20,
-              'R7': _STAND['R7'] - 8,  'L7': _STAND['L7'] + 8}
-        smooth_move_leg(list(wl.keys()), wl, steps=s, delay=dl)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=s, delay=dl)
-
-
-def _move_peek(speed=1.0):
-    """تطلع — يميل للأمام ببطء ثم يتلفت يمين ويسار."""
-    s = max(10, int(18 / speed))
-    dl = max(0.02, 0.04 / speed)
-    peek = {**_STAND,
-            'R0': _STAND['R0'] + 15, 'L0': _STAND['L0'] - 15,
-            'R1': _STAND['R1'] + 20, 'L1': _STAND['L1'] + 20,
-            'R7': max(45, _STAND['R7'] - 12), 'L7': max(45, _STAND['L7'] - 12)}
-    smooth_move_leg(list(peek.keys()), peek, steps=s, delay=dl)
-    time.sleep(0.5 / speed)
-    s2 = max(6, int(10 / speed))
-    pr = dict(peek)
-    pr['R0'] = _STAND['R0'] - 10
-    pr['L0'] = _STAND['L0'] + 10
-    smooth_move_leg(list(pr.keys()), pr, steps=s2, delay=dl)
-    time.sleep(0.3 / speed)
-    pl = dict(peek)
-    pl['R0'] = _STAND['R0'] + 25
-    pl['L0'] = _STAND['L0'] - 25
-    smooth_move_leg(list(pl.keys()), pl, steps=s2, delay=dl)
-    time.sleep(0.3 / speed)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=s, delay=dl)
-
-
-def _move_gallop(speed=1.0):
-    """عدو — مشي سريع بخطوات كبيرة."""
-    params = _load_gait_params('forward_tripod')
-    if params:
-        global gait_running
-        gait_running = True
-        gait_event.set()
-        _run_forward_gait(params, speed * 2.0, 6, 'forward')
-
-
-def _move_moonwalk(speed=1.0):
-    """مون ووك — مشي خلفي أنيق مع تأرجح."""
-    s = max(5, int(8 / speed))
-    dl = max(0.01, 0.02 / speed)
-    for _ in range(3):
-        sway_r = {**_STAND,
-                  'R1': _STAND['R1'] + 6, 'R4': _STAND['R4'] + 6, 'R7': _STAND['R7'] + 6,
-                  'L1': _STAND['L1'] - 6, 'L4': _STAND['L4'] - 6, 'L7': _STAND['L7'] - 6}
-        smooth_move_leg(list(sway_r.keys()), sway_r, steps=s, delay=dl)
-        sway_l = {**_STAND,
-                  'L1': _STAND['L1'] + 6, 'L4': _STAND['L4'] + 6, 'L7': _STAND['L7'] + 6,
-                  'R1': _STAND['R1'] - 6, 'R4': _STAND['R4'] - 6, 'R7': _STAND['R7'] - 6}
-        smooth_move_leg(list(sway_l.keys()), sway_l, steps=s, delay=dl)
-    smooth_move_leg(list(_STAND.keys()), _STAND, steps=4, delay=0.02)
-    params = _load_gait_params('forward_tripod')
-    if params:
-        global gait_running
-        gait_running = True
-        gait_event.set()
-        _run_forward_gait(params, speed * 0.6, 4, 'backward')
-
-
-# ── Special Move Endpoint ──
+# ── Special Move Endpoint (محمي بالتحكيم — ثغرة #1) ──
 @app.route("/api/special/<move_name>", methods=["POST"])
 def special_move(move_name):
+    from spider.moves import SPECIALS, run_special
     data  = request.json or {}
     speed = float(data.get('speed', 1.0))
 
-    specials = {
-        'wave':        _move_wave,
-        'dance':       _move_dance,
-        'shake':       _move_shake,
-        'salute':      _move_salute,
-        'roar':        _move_roar,
-        'spin':        _move_spin,
-        'bow':         _move_bow,
-        'stretch':     _move_stretch,
-        'idle_sway':   _move_idle_sway,
-        'wake_up':     _move_wake_up,
-        'sleep_pose':  _move_sleep_pose,
-        'flatten':     _move_flatten,
-        'push_up':     _move_push_up,
-        'tippy_toes':  _move_tippy_toes,
-        'look_around': _move_look_around,
-        'pounce':      _move_pounce,
-        'stomp':       _move_stomp,
-        'scared':      _move_scared,
-        'dizzy':       _move_dizzy,
-        'wiggle':      _move_wiggle,
-        'peek':        _move_peek,
-        'gallop':      _move_gallop,
-        'moonwalk':    _move_moonwalk,
-    }
-
-    fn = specials.get(move_name)
+    fn = SPECIALS.get(move_name)
     if not fn:
-        return jsonify({'ok': False, 'error': f'unknown special: {move_name}'})
+        return jsonify({'ok': False, 'error': f'unknown special: {move_name}'}), 404
 
-    t = threading.Thread(target=fn, args=(speed,), daemon=True)
-    t.start()
+    if not run_special(move_name, fn, speed):
+        return jsonify({'ok': False, 'error': 'busy — أوقف المشي أولاً'}), 409
     return jsonify({'ok': True, 'move': move_name})
 
 
 # ════════════════════════════════════════════════════════════════
-# ── Smooth Ripple Gait (Foot Trajectory + Tibia ديناميكي) ──
-# ════════════════════════════════════════════════════════════════
 
-def foot_arc_trajectory(phase, stride_length, lift_height):
-    """
-    حساب مسار القدم — قوس D ناعم.
-    phase: 0.0 → 1.0 (دورة كاملة)
-    Returns: (coxa_offset, femur_lift)
-    """
-    if phase < 0.5:
-        # ── Swing Phase (بالهوا) ──
-        t = phase / 0.5  # 0→1
-        t_smooth = ease_smoothstep(t)
-        coxa_offset = -stride_length / 2 + stride_length * t_smooth
-        femur_lift = lift_height * math.sin(t * math.pi)
-    else:
-        # ── Stance Phase (على الأرض) ──
-        t = (phase - 0.5) / 0.5  # 0→1
-        t_smooth = ease_smoothstep(t)
-        coxa_offset = stride_length / 2 - stride_length * t_smooth
-        femur_lift = 0.0
-    return coxa_offset, femur_lift
-
-
-def tibia_compensation(lift_ratio, max_comp=0.5):
-    """
-    تعويض Tibia — يعاكس Femur عشان القدم تبقى أفقية نسبياً.
-    lift_ratio: 0.0 (على الأرض) → 1.0 (أعلى نقطة)
-    """
-    comp = ease_smoothstep(lift_ratio) * max_comp
-    return comp
-
-
-# اتجاهات Coxa و Tibia
-COXA_DIRECTION = {
-    "RF": +1, "RM": +1, "RR": +1,
-    "LF": -1, "LM": -1, "LR": -1,
-}
-TIBIA_DIRECTION = {
-    "RF": +1, "RM": +1, "RR": +1,
-    "LF": -1, "LM": -1, "LR": -1,
-}
-
-
-def _run_smooth_ripple(params, speed=1.0, max_cycles=0, direction='forward'):
-    """Ripple Gait محسّن مع Foot Trajectory + Tibia ديناميكي + Balance"""
-    global gait_running, gait_step_count, gait_current_phase
-
-    RIPPLE_ORDER = params.get("RIPPLE_ORDER", ["RR", "RM", "RF", "LR", "LM", "LF"])
-    LIFT_DEG = params.get("LIFT_DEG", 14)
-    SWING_DEG = params.get("SWING_DEG", 20)
-    TOTAL_FRAMES = params.get("total_frames", 60)
-
-    delay = (params.get("frame_delay_ms", 20) / 1000.0) / speed
-    frame = 0
-    cycles = 0
-    phase_offset = 1.0 / len(RIPPLE_ORDER)
-
-    legs_order = list(params["legs"].keys())
-
-    while gait_event.is_set():
-        if max_cycles > 0 and cycles >= max_cycles:
-            break
-
-        global_phase = frame / TOTAL_FRAMES
-        all_targets = {}
-
-        for idx, leg_name in enumerate(RIPPLE_ORDER):
-            leg = params["legs"][leg_name]
-            side = leg["side"]
-
-            # حساب phase لهاي الرجل (مع offset)
-            leg_phase = (global_phase + idx * phase_offset) % 1.0
-
-            # اتجاه الحركة
-            coxa_body_offset = 0
-            if direction == 'strafe_left':
-                coxa_body_offset = -18
-                sign = 1 if side == "R" else -1
-            elif direction == 'strafe_right':
-                coxa_body_offset = 18
-                sign = 1 if side == "R" else -1
-            elif direction == 'turn_left':
-                sign = 1 if side == "R" else 1
-            elif direction == 'turn_right':
-                sign = -1 if side == "R" else -1
-            else:
-                sign = 1 if side == "R" else -1
-                if direction == 'backward':
-                    sign = -sign
-
-            # ── Foot Trajectory (قوس D) ──
-            stride = SWING_DEG * abs(sign) if sign != 0 else SWING_DEG
-            coxa_off, femur_lift = foot_arc_trajectory(leg_phase, stride, LIFT_DEG)
-
-            # Tibia تعويض ديناميكي
-            lift_ratio = femur_lift / LIFT_DEG if LIFT_DEG > 0 else 0
-            tibia_off = -femur_lift * tibia_compensation(lift_ratio, max_comp=0.5)
-
-            # ── Balance correction — فقط إذا على الأرض ──
-            balance_off = 0.0
-            if balance.enabled and femur_lift < 0.5:
-                balance_off = balance.femur_offsets.get(leg_name, 0.0)
-
-            # حساب الزوايا النهائية — نفس منطق الـ Ripple العادي
-            coxa_target = leg["coxa_stand"] + coxa_off * sign + coxa_body_offset
-            femur_target = leg["femur_stand"] + femur_lift + balance_off
-            tibia_target = leg["tibia"] - femur_lift * 0.4
-
-            # حدود أمان
-            coxa_target = max(50, min(130, round(coxa_target)))
-            femur_target = max(50, min(130, round(femur_target)))
-            tibia_target = max(50, min(130, round(tibia_target)))
-
-            # حساب القنوات
-            leg_idx = legs_order.index(leg_name)
-            if side == "R":
-                ch = leg_idx * 3
-            else:
-                ch = (leg_idx - 3) * 3
-
-            all_targets[f"{side}{ch}"] = coxa_target
-            all_targets[f"{side}{ch+1}"] = femur_target
-            all_targets[f"{side}{ch+2}"] = tibia_target
-
-        gait_current_phase = f"smooth-ripple-{frame}"
-        smooth_move_leg(list(all_targets.keys()), all_targets, steps=3, delay=0.01)
-
-        frame += 1
-        if frame >= TOTAL_FRAMES:
-            frame = 0
-            cycles += 1
-            gait_step_count += 1
-
-        remaining = delay - 3 * 0.01
-        time.sleep(max(0, remaining))
-
-    # إيقاف نظيف — ارجع لوضعية الوقوف
-    gait_current_phase = "returning"
-    stance_targets = {}
-    for leg_name, leg_data in params["legs"].items():
-        side = leg_data["side"]
-        leg_idx = list(params["legs"].keys()).index(leg_name)
-        if side == "R":
-            ch = leg_idx * 3
-        else:
-            ch = (leg_idx - 3) * 3
-        stance_targets[f"{side}{ch}"] = leg_data["coxa_stand"]
-        stance_targets[f"{side}{ch+1}"] = leg_data["femur_stand"]
-        stance_targets[f"{side}{ch+2}"] = leg_data["tibia"]
-
-    smooth_move_leg(list(stance_targets.keys()), stance_targets, steps=12, delay=0.03)
-    gait_current_phase = "idle"
-    gait_running = False
-    gait_event.clear()
 
 
 @app.route('/api/gait/smooth-ripple/start', methods=['POST'])
@@ -2346,12 +1021,26 @@ def smooth_ripple_start():
         gait_thread = threading.Thread(
             target=_run_lateral_gait,
             args=(tripod_params or params, speed, max_cycles, lat_dir),
+            kwargs={
+                "gait_event": gait_event,
+                "gait_running_ref": GlobalRef("gait_running"),
+                "balance": balance,
+                "step_counter_ref": GlobalRef("gait_step_count"),
+                "phase_ref": GlobalRef("gait_current_phase")
+            },
             daemon=True
         )
     else:
         gait_thread = threading.Thread(
             target=_run_smooth_ripple,
             args=(params, speed, max_cycles, direction),
+            kwargs={
+                "gait_event": gait_event,
+                "gait_running_ref": GlobalRef("gait_running"),
+                "balance": balance,
+                "step_counter_ref": GlobalRef("gait_step_count"),
+                "phase_ref": GlobalRef("gait_current_phase")
+            },
             daemon=True
         )
     gait_thread.start()
@@ -2365,6 +1054,126 @@ def smooth_ripple_stop():
     gait_running = False
     gait_event.clear()
     return jsonify({"ok": True, "status": "smooth ripple stopping..."})
+
+# ── Live Tuning and Config Management (Plan 04) ──
+CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
+
+def _cfg_path(name):
+    allowed = ["servo_limits", "gait_params", "ripple_gait_params", "balance_config", "motion"]
+    if name not in allowed:
+        return None
+    return os.path.join(CONFIG_DIR, name + ".json")
+
+def _reload_config(name):
+    """إعادة تحميل حيّ بلا إعادة تشغيل السيرفر."""
+    if name == "servo_limits":
+        from spider import config as _c
+        _c.reload()
+    elif name == "balance_config":
+        balance.reload()
+    elif name == "motion":
+        from spider import safety, gaits, moves
+        safety.reload_motion()
+        gaits.reload_motion()
+        moves.reload_motion()
+    # gait_params/ripple تُقرأ عند بدء كل مشي، فلا تحتاج reload خاص
+
+@app.route("/api/config/<name>", methods=["GET"])
+def config_get(name):
+    p = _cfg_path(name)
+    if not p or not os.path.exists(p):
+        return jsonify({"ok": False, "error": f"Config {name} not found"}), 404
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/config/<name>", methods=["POST"])
+def config_set(name):
+    import shutil
+    p = _cfg_path(name)
+    if not p or not os.path.exists(p):
+        return jsonify({"ok": False, "error": f"Config {name} not found"}), 404
+    try:
+        # نسخة احتياطية قبل الكتابة
+        shutil.copy(p, p + ".bak")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(request.json, f, indent=2, ensure_ascii=False)
+        _reload_config(name)
+        return jsonify({"ok": True, "saved": name})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/config/<name>/restore", methods=["POST"])
+def config_restore(name):
+    import shutil
+    p = _cfg_path(name)
+    if not p:
+        return jsonify({"ok": False, "error": "Invalid config name"}), 400
+    bak = p + ".bak"
+    if os.path.exists(bak):
+        try:
+            shutil.copy(bak, p)
+            _reload_config(name)
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": False, "error": "no backup found"}), 404
+
+@app.route("/api/limit/nudge", methods=["POST"])
+def limit_nudge():
+    """حرّك محركاً واحداً لزاوية (للمعايرة بالملاحظة). يتجاوز حدوده مؤقتاً بحذر."""
+    d = request.json
+    key = d.get("key")
+    angle = d.get("angle")
+    if key is None or angle is None:
+        return jsonify({"ok": False, "error": "Missing key or angle"}), 400
+    
+    # حماية التحكيم
+    if not arbiter.acquire("limit_tune"):
+        return jsonify({"ok": False, "error": "Arbiter busy"}), 409
+        
+    try:
+        angle = int(angle)
+        # كتابة مباشرة للمحرك دون حواجز الحدود لأننا بصدد المعايرة
+        from spider.hardware import write_batch_raw
+        write_batch_raw({key: angle})
+        # وتحديث current لتسجيل الحالة الحالية
+        from spider.safety import current
+        current[key] = angle
+        return jsonify({"ok": True, "key": key, "angle": angle})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        arbiter.release("limit_tune")
+
+@app.route("/api/limit/set", methods=["POST"])
+def limit_set():
+    """يحفظ حدّاً آمناً لمحرك في servo_limits.json."""
+    d = request.json
+    key = d.get("key")
+    mn = d.get("min")
+    mx = d.get("max")
+    if key is None or mn is None or mx is None:
+        return jsonify({"ok": False, "error": "Missing parameters"}), 400
+        
+    p = _cfg_path("servo_limits")
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if "overrides" not in data:
+            data["overrides"] = {}
+        data["overrides"][key] = {"min": int(mn), "max": int(mx)}
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            
+        from spider import config as _c
+        _c.reload()
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 # ── startup IMU zero ──

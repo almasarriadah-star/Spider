@@ -99,10 +99,16 @@ body{background:#0d0d0f;color:#e0e0e0;font-family:'Segoe UI',Tahoma,sans-serif;p
     <div class="card-desc">BNO085 — قراءة Roll / Pitch / Yaw بالوقت الحقيقي</div>
   </div>
 
-  <div class="card card-off card-full" onclick="emergencyStop()">
+  <div class="card card-off card-full" onclick="emergencyStop()" style="background: #8a0000; border: 1px solid #ff0000;">
     <div class="card-icon">⛔</div>
-    <div class="card-title">إيقاف طارئ</div>
-    <div class="card-desc">إيقاف المشي + إطفاء المحركات فوراً</div>
+    <div class="card-title" style="color: #fff;">إيقاف طارئ</div>
+    <div class="card-desc" style="color: #ffcccc;">إيقاف المشي + قطع التغذية فوراً</div>
+  </div>
+
+  <div class="card card-full" onclick="clearEstop()" style="background: #1e5c3f; border: 1px solid #3cb371;">
+    <div class="card-icon">🟢</div>
+    <div class="card-title" style="color: #fff;">إلغاء الطوارئ</div>
+    <div class="card-desc" style="color: #ccffdd;">إعادة توصيل التغذية وتصفير الأهداف</div>
   </div>
 </div>
 
@@ -127,9 +133,13 @@ async function init(){
 }
 
 async function emergencyStop(){
-  await fetch('/api/gait/forward/stop',{method:'POST'});
-  await fetch('/api/off',{method:'POST'});
-  document.getElementById('gaitPill').textContent='🔴 إيقاف طارئ';
+  await fetch('/api/estop',{method:'POST'});
+  document.getElementById('gaitPill').textContent='🔴 طوارئ - التغذية مقطوعة';
+}
+
+async function clearEstop(){
+  await fetch('/api/estop/clear',{method:'POST'});
+  document.getElementById('gaitPill').textContent='⬛️ واقف';
 }
 
 init();
