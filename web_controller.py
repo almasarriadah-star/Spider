@@ -329,6 +329,9 @@ def get_leg_angles(leg_name, frame, params, gait_type='forward'):
     elif gait_type == 'high_step':
         femur_lift_extra = 25
         amp = amp * 0.8
+    elif gait_type == 'glide':
+        femur_lift_extra = -(leg["femur_lift"] - leg["femur_stand"] - 8)
+        amp = int(amp * 1.15)
 
     base_femur = leg["femur_stand"] + femur_stance_offset
 
