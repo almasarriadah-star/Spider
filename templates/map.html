@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🕷️ خريطة الروبوت</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0d0d0f; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; }
+#map { height: calc(100vh - 50px); }
+.toolbar {
+  display: flex; gap: 8px; align-items: center; padding: 8px 12px;
+  background: #131318; border-bottom: 1px solid #222; flex-wrap: wrap;
+}
+.toolbar h2 { color: #58a6ff; font-size: 14px; margin-left: auto; }
+.btn {
+  padding: 6px 12px; border: none; border-radius: 8px; cursor: pointer;
+  font-weight: 700; font-size: 12px; transition: opacity .12s;
+}
+.btn:active { opacity: .7; }
+.btn-blue  { background: #0a1a5c; color: #58a6ff; border: 1px solid #1a3a8a; }
+.btn-red   { background: #5c0a0a; color: #f85149; border: 1px solid #8a1a1a; }
+.btn-gray  { background: #1a1a1a; color: #888;    border: 1px solid #333; }
+.btn-green { background: #0a5c2e; color: #3fb950; border: 1px solid #1a8a44; }
+#gpsStatus { font-size: 11px; color: #666; }
+.leaflet-popup-content { font-size: 13px; }
+.poiLbl {
+  background: transparent !important; border: none !important;
+  box-shadow: none !important; color: #fff; font-size: 11px;
+  text-shadow: 0 0 4px #000;
+}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button class="btn btn-blue" onclick="refreshTrack()">🔄 تحديث</button>
+  <button class="btn btn-red"  onclick="clearPois('all')">🗑️ مسح النقاط</button>
+  <button class="btn btn-gray" onclick="clearPois('lidar_obstacle')">مسح ليدار</button>
+  <button class="btn btn-green" onclick="lidarProject()">📡 أسقِط ليدار</button>
+  <button class="btn btn-blue" onclick="centerRobot()">📍 مركّز</button>
+  <span id="gpsStatus">جاري التحميل...</span>
+  <h2>🕷️ خريطة Spider</h2>
+</div>
+<div id="map"></div>
+
+<script>
+const DEF_LAT = 31.9539, DEF_LON = 35.9106;
+const map = L.map('map').setView([DEF_LAT, DEF_LON], 18);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 22,
+  attribution: '© OpenStreetMap'
+}).addTo(map);
+
+const robotMarker = L.marker([DEF_LAT, DEF_LON]).addTo(map)
+  .bindPopup('<b>🕷️ الروبوت</b>');
+const trackLine = L.polyline([], { color: '#58a6ff', weight: 3 }).addTo(map);
+const poiLayer  = L.layerGroup().addTo(map);
+
+const POI_ICONS = {
+  soil:            { emoji: '💧', color: '#58a6ff' },
+  weed:            { emoji: '🌿', color: '#3fb950' },
+  lidar_obstacle:  { emoji: '⛔', color: '#f85149' },
+  marker:          { emoji: '📍', color: '#f0883e' }
+};
+
+function poiIcon(type, risk) {
+  const cfg = POI_ICONS[type] || { emoji: '📍', color: '#888' };
+  const col = type === 'weed' && risk === 'high' ? '#f85149' :
+              type === 'weed' && risk === 'medium' ? '#f0883e' : cfg.color;
+  return L.divIcon({
+    html: `<div style="font-size:22px;filter:drop-shadow(0 0 3px ${col})">${cfg.emoji}</div>`,
+    className: '', iconAnchor: [11, 22]
+  });
+}
+
+async function refreshTrack() {
+  try {
+    const d = await (await fetch('/api/gps/track')).json();
+    trackLine.setLatLngs(d.track.map(p => [p.lat, p.lon]));
+    poiLayer.clearLayers();
+    for (const p of d.pois) {
+      let label = p.type;
+      if (p.type === 'soil')           label = `💧 رطوبة ${p.props.moisture}%`;
+      else if (p.type === 'weed')      label = `🌿 خطر: ${p.props.risk || ''}`;
+      else if (p.type === 'lidar_obstacle') label = `⛔ ${p.props.dist || ''}مم`;
+      L.marker([p.lat, p.lon], { icon: poiIcon(p.type, p.props.risk) })
+        .addTo(poiLayer)
+        .bindTooltip(label, { permanent: true, direction: 'top', className: 'poiLbl' });
+    }
+  } catch(e) { console.error(e); }
+}
+
+async function clearPois(type) {
+  const body = type === 'all' ? {} : { type };
+  await fetch('/api/gps/track/clear', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  refreshTrack();
+}
+
+async function lidarProject() {
+  const r = await (await fetch('/api/lidar/project', { method: 'POST' })).json();
+  alert(r.ok ? `أُضيفت ${r.added} عائق للخريطة` : 'خطأ: ' + (r.error || ''));
+  if (r.ok) refreshTrack();
+}
+
+function centerRobot() {
+  const ll = robotMarker.getLatLng();
+  map.setView(ll, 18);
+}
+
+// بثّ حيّ عبر SSE
+const es = new EventSource('/api/stream');
+es.onmessage = e => {
+  try {
+    const d = JSON.parse(e.data);
+    if (d.gps && d.gps.fix) {
+      const ll = [d.gps.lat, d.gps.lon];
+      robotMarker.setLatLng(ll);
+      if (!map._spiderCentered) { map.setView(ll, 18); map._spiderCentered = true; }
+      document.getElementById('gpsStatus').textContent =
+        `📡 ${d.gps.sats} قمر | ${d.gps.speed} م/ث | ${d.gps.lat.toFixed(5)}, ${d.gps.lon.toFixed(5)}${d.gps.fix && d.gps.simulate !== false ? ' (محاكاة)' : ''}`;
+    }
+  } catch(err) {}
+};
+
+refreshTrack();
+setInterval(refreshTrack, 5000);
+</script>
+</body>
+</html>

@@ -165,6 +165,25 @@ def _sync_force_stop(val: bool):
     set_force_stop(val)
 
 
+# ── حماية سباق ملكية المحكّم (إصلاح BUG03) ──
+def _gait_busy():
+    """True لو فيه خيط مشي ما زال حياً أو الحدث مضبوط.
+    يفحص is_alive() وليس الحدث فقط — لأن الخيط يبقى يملك "gait" أثناء
+    رجوعه لوضعية الوقوف بعد مسح الحدث."""
+    return gait_event.is_set() or (gait_thread is not None and gait_thread.is_alive())
+
+
+def _stop_gait_sync(timeout=2.0):
+    """إيقاف متزامن: يمسح الحدث وينتظر الخيط حتى يحرّر الملكية فعلاً.
+    هذا يمنع سباق إعادة التشغيل (بدء خيط ثانٍ قبل أن ينتهي الأول)."""
+    global gait_running
+    gait_running = False
+    gait_event.clear()
+    t = gait_thread
+    if t is not None and t.is_alive():
+        t.join(timeout=timeout)
+
+
 
 
 
@@ -245,7 +264,7 @@ balance.configure(
 
 
 # ── Routes ──
-@app.route("/")
+@app.route("/home")
 def main_page():
     return render_template("main.html")
 
@@ -368,21 +387,23 @@ def api_off():
 # ── الإيقاف الطارئ البرمجي ──
 @app.route("/api/estop", methods=["POST"])
 def api_estop():
-    """إيقاف طارئ فوري: يوقف كل threads الحركة + يصفّر PWM (ترخية السيرفوات)."""
-    global gait_running, _force_stop
-    _force_stop = True
+    """إيقاف طارئ فوري: يقطع PWM أولاً (زمن استجابة ثابت) ثم يوحّد العلم ويوقف الباقي."""
+    global gait_running
+    arbiter.emergency_stop()    # 1) أولاً: قطع التغذية/PWM فوراً — لا تأخير قبله
+    _sync_force_stop(True)      # 2) وحّد علم الإيقاف في web + spider معاً
     gait_running = False
-    gait_event.clear()          # أوقف حلقات المشي
-    balance.stop()              # أوقف التوازن لو شغّال
-    arbiter.emergency_stop()    # يصفّر PWM + يفرّغ الأهداف + يمنع أي كتابة جديدة
+    gait_event.clear()          # 3) أوقف حلقات المشي
+    try:
+        balance.stop()          # 4) أخيراً: أوقف التوازن (قد يحجب حتى ثانيتين)
+    except Exception:
+        pass
     return jsonify({"ok": True, "estop": True})
 
 
 @app.route("/api/estop/clear", methods=["POST"])
 def api_estop_clear():
     """إلغاء الطوارئ: يعيد المحكّم للعمل بهدف=الوضع الحالي (لا حركة مفاجئة)."""
-    global _force_stop
-    _force_stop = False
+    _sync_force_stop(False)     # وحّد العلم في web + spider (بدل _force_stop = False)
     arbiter.clear_estop()
     return jsonify({"ok": True, "estop": False})
 
@@ -739,7 +760,9 @@ def ripple_gait_start():
     """تشغيل Ripple Gait — مشي العنكبوت المتناغم."""
     global gait_running, gait_thread, gait_step_count
 
-    if gait_event.is_set():
+    if arbiter.in_estop():
+        return jsonify({"ok": False, "error": "الطوارئ مفعّل — اضغط «إلغاء الطوارئ» أولاً"}), 409
+    if _gait_busy():
         return jsonify({"ok": False, "error": "already running"})
 
     data = request.json or {}
@@ -790,11 +813,9 @@ def ripple_gait_start():
 
 @app.route("/api/gait/ripple/stop", methods=["POST"])
 def ripple_gait_stop():
-    """إيقاف Ripple Gait."""
-    global gait_running
-    gait_running = False
-    gait_event.clear()
-    return jsonify({"ok": True, "status": "ripple stopping..."})
+    """إيقاف Ripple Gait (متزامن)."""
+    _stop_gait_sync()
+    return jsonify({"ok": True, "status": "ripple stopped"})
 
 
 @app.route("/api/gait/ripple/status", methods=["GET"])
@@ -812,7 +833,9 @@ def ripple_gait_status():
 def gait_forward_start():
     global gait_running, gait_thread, gait_step_count
 
-    if gait_event.is_set():
+    if arbiter.in_estop():
+        return jsonify({"ok": False, "error": "الطوارئ مفعّل — اضغط «إلغاء الطوارئ» أولاً"}), 409
+    if _gait_busy():
         return jsonify({"ok": False, "error": "already running"})
 
     data = request.json or {}
@@ -867,10 +890,8 @@ def gait_forward_start():
 
 @app.route("/api/gait/forward/stop", methods=["POST"])
 def gait_forward_stop():
-    global gait_running
-    gait_running = False
-    gait_event.clear()
-    return jsonify({"ok": True, "status": "stopping..."})
+    _stop_gait_sync()
+    return jsonify({"ok": True, "status": "stopped"})
 
 
 @app.route("/api/gait/forward/status", methods=["GET"])
@@ -878,7 +899,8 @@ def gait_forward_status():
     return jsonify({
         "running": gait_running,
         "step_count": gait_step_count,
-        "current_phase": gait_current_phase
+        "current_phase": gait_current_phase,
+        "estop": arbiter.in_estop()
     })
 
 
@@ -896,7 +918,9 @@ def gait_once():
         return jsonify({'ok': False, 'error': 'params not found'})
 
     global gait_running, gait_thread
-    if gait_event.is_set():
+    if arbiter.in_estop():
+        return jsonify({'ok': False, 'error': 'الطوارئ مفعّل — اضغط «إلغاء الطوارئ» أولاً'}), 409
+    if _gait_busy():
         return jsonify({'ok': False, 'error': 'already running'})
 
     gait_running = True
@@ -998,7 +1022,9 @@ def smooth_ripple_start():
     """تشغيل Smooth Ripple Gait — Foot Trajectory + Tibia ديناميكي."""
     global gait_running, gait_thread, gait_step_count
 
-    if gait_event.is_set():
+    if arbiter.in_estop():
+        return jsonify({"ok": False, "error": "الطوارئ مفعّل — اضغط «إلغاء الطوارئ» أولاً"}), 409
+    if _gait_busy():
         return jsonify({"ok": False, "error": "already running"})
 
     data = request.json or {}
@@ -1049,11 +1075,9 @@ def smooth_ripple_start():
 
 @app.route('/api/gait/smooth-ripple/stop', methods=['POST'])
 def smooth_ripple_stop():
-    """إيقاف Smooth Ripple Gait."""
-    global gait_running
-    gait_running = False
-    gait_event.clear()
-    return jsonify({"ok": True, "status": "smooth ripple stopping..."})
+    """إيقاف Smooth Ripple Gait (متزامن)."""
+    _stop_gait_sync()
+    return jsonify({"ok": True, "status": "smooth ripple stopped"})
 
 # ── Live Tuning and Config Management (Plan 04) ──
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
@@ -1196,6 +1220,351 @@ def _startup_imu_zero():
         print(f"IMU zeroed: roll={bno_zero_roll:.2f} pitch={bno_zero_pitch:.2f}")
 
 
+# ════════════════════════════════════════════════════════════════
+# ── خطة 05: مسار /api/move الموحّد (للجوي ستيك) ──
+# ════════════════════════════════════════════════════════════════
+import math as _math
+
+_move_active_type = [None]    # نوع المشي الحالي الصادر من الجوي ستيك
+
+
+@app.route("/api/move", methods=["POST"])
+def api_move():
+    """مسار الجوي ستيك الموحّد: يستقبل (vx,vy,omega) ويبدأ/يوقف المشي تلقائياً."""
+    global gait_running, gait_thread, gait_step_count
+    d = request.json or {}
+    vx = float(d.get("vx", 0))
+    vy = float(d.get("vy", 0))
+    om = float(d.get("omega", 0))
+
+    # شرط الإيقاف
+    if abs(vx) < 0.05 and abs(vy) < 0.05 and abs(om) < 0.05:
+        if _gait_busy():
+            _stop_gait_sync(timeout=2.0)
+        _move_active_type[0] = None
+        return jsonify({"ok": True, "stopped": True})
+
+    if arbiter.in_estop():
+        return jsonify({"ok": False, "error": "estop active"}), 409
+
+    # حدّد نوع الحركة + السرعة
+    mag = _math.hypot(vx, vy)
+    speed = max(0.3, min(2.0, max(mag, abs(om))))
+
+    if abs(om) > 0.3 and abs(om) >= mag:
+        gait_type = "rotate_cw" if om > 0 else "rotate_ccw"
+    elif abs(vy) >= abs(vx):
+        gait_type = "shift_right" if vy > 0 else "shift_left"
+    else:
+        gait_type = "forward" if vx > 0 else "backward"
+
+    # نفس الحركة شغّالة → استمر بلا إعادة تشغيل
+    if _gait_busy() and _move_active_type[0] == gait_type:
+        return jsonify({"ok": True, "running": gait_type, "speed": speed})
+
+    # حركة مختلفة أو غير شغّالة → أوقف أولاً ثم ابدأ
+    if _gait_busy():
+        _stop_gait_sync(timeout=1.5)
+
+    params = _load_gait_params("forward_tripod")
+    if not params:
+        return jsonify({"ok": False, "error": "params not found"})
+
+    _move_active_type[0] = gait_type
+    gait_running = True
+    gait_event.set()
+    gait_step_count = 0
+
+    lateral_map = {"shift_left": "left", "shift_right": "right"}
+    if gait_type in lateral_map:
+        gait_thread = threading.Thread(
+            target=_run_lateral_gait,
+            args=(params, speed, 0, lateral_map[gait_type]),
+            kwargs={
+                "gait_event": gait_event,
+                "gait_running_ref": GlobalRef("gait_running"),
+                "balance": balance,
+                "step_counter_ref": GlobalRef("gait_step_count"),
+                "phase_ref": GlobalRef("gait_current_phase")
+            }, daemon=True
+        )
+    else:
+        gait_thread = threading.Thread(
+            target=_run_forward_gait,
+            args=(params, speed, 0, gait_type),
+            kwargs={
+                "gait_event": gait_event,
+                "gait_running_ref": GlobalRef("gait_running"),
+                "balance": balance,
+                "step_counter_ref": GlobalRef("gait_step_count"),
+                "phase_ref": GlobalRef("gait_current_phase")
+            }, daemon=True
+        )
+    gait_thread.start()
+    return jsonify({"ok": True, "started": gait_type, "speed": speed})
+
+
+# ════════════════════════════════════════════════════════════════
+# ── خطة 06: الكاميرات (RGB + حرارية) ──
+# ════════════════════════════════════════════════════════════════
+from flask import Response
+from spider.sensors.camera import RGBCamera, ThermalCamera
+from spider.hardware import i2c_lock as _i2c_lock
+
+_rgb_cam = RGBCamera()
+_thermal_cam = ThermalCamera(i2c_lock=_i2c_lock)
+
+
+@app.route("/video/rgb")
+def video_rgb():
+    return Response(_rgb_cam.mjpeg(),
+                    mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.route("/video/thermal")
+def video_thermal():
+    return Response(_thermal_cam.mjpeg(),
+                    mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.route("/api/thermal/frame")
+def thermal_frame():
+    m = _thermal_cam.read_matrix()
+    if m is None:
+        return jsonify({"ok": False})
+    return jsonify({"ok": True, "shape": list(m.shape),
+                    "min": float(m.min()), "max": float(m.max()),
+                    "data": [[round(v, 1) for v in row] for row in m.tolist()]})
+
+
+@app.route("/api/cameras/status")
+def cameras_status():
+    return jsonify({
+        "rgb": _rgb_cam.backend is not None,
+        "thermal": _thermal_cam.ready
+    })
+
+
+# ════════════════════════════════════════════════════════════════
+# ── خطة 07: GPS + مخزن التتبّع + SSE ──
+# ════════════════════════════════════════════════════════════════
+from spider.sensors.gps import gps as _gps
+from spider.telemetry import store as _track_store
+
+
+def _gps_feeder():
+    """خيط يضيف قراءات GPS للمسار كل ثانية."""
+    import time as _t
+    while True:
+        d = _gps.data
+        if d.get("fix"):
+            _track_store.add_fix(d["lat"], d["lon"], d.get("ts"))
+        _t.sleep(1.0)
+
+
+_gps.start()
+threading.Thread(target=_gps_feeder, name="GPSFeeder", daemon=True).start()
+
+
+@app.route("/api/gps/now")
+def gps_now():
+    return jsonify(_gps.data)
+
+
+@app.route("/api/gps/track")
+def gps_track():
+    return jsonify(_track_store.snapshot())
+
+
+@app.route("/api/gps/track/clear", methods=["POST"])
+def gps_track_clear():
+    d = request.json or {}
+    _track_store.clear_pois(d.get("type"))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/stream")
+def sensor_stream():
+    """SSE: يبثّ موقع GPS + حالة المشي كل ثانية."""
+    import time as _t
+    import json as _json
+
+    def gen():
+        while True:
+            payload = {
+                "gps": _gps.data,
+                "gait": {
+                    "running": gait_running,
+                    "phase": gait_current_phase,
+                    "estop": arbiter.in_estop()
+                }
+            }
+            yield f"data: {_json.dumps(payload)}\n\n"
+            _t.sleep(1.0)
+
+    return Response(gen(), mimetype="text/event-stream")
+
+
+@app.route("/map")
+def map_page():
+    return render_template("map.html")
+
+
+# ════════════════════════════════════════════════════════════════
+# ── خطة 08: الليدار ──
+# ════════════════════════════════════════════════════════════════
+from spider.sensors.lidar import lidar as _lidar, obstacles_world as _obstacles_world
+
+_lidar.start()
+
+
+@app.route("/api/lidar/scan")
+def lidar_scan():
+    return jsonify({"ready": _lidar.ready, "scan": _lidar.get_scan()})
+
+
+@app.route("/api/lidar/status")
+def lidar_status():
+    sc = _lidar.get_scan()
+    return jsonify({"ready": _lidar.ready, "points": len(sc)})
+
+
+@app.route("/api/lidar/project", methods=["POST"])
+def lidar_project():
+    """يُسقط العوائق الحالية على الخريطة كـ POI عالمية."""
+    g = _gps.data
+    heading = 0.0
+    try:
+        r = read_bno_single()
+        if r:
+            heading = r.get("yaw", 0.0)
+    except Exception:
+        pass
+    if not g.get("fix"):
+        return jsonify({"ok": False, "error": "no gps fix"})
+    pts = _obstacles_world(_lidar.get_scan(), g["lat"], g["lon"], heading)
+    for p in pts:
+        _track_store.add_poi("lidar_obstacle", p["lat"], p["lon"], {"dist": p["dist"]})
+    return jsonify({"ok": True, "added": len(pts)})
+
+
+# ════════════════════════════════════════════════════════════════
+# ── خطة 09: رطوبة التربة + كشف الأعشاب + مسح آلي ──
+# ════════════════════════════════════════════════════════════════
+from spider.sensors.soil import soil as _soil
+from spider.vision.weeds import analyze_frame as _analyze_frame, classify_weed as _classify_weed
+
+import time as _time_mod
+
+_survey = {"on": False, "min_dist_m": 1.0, "last": None}
+
+
+def _haversine(a, b):
+    R = 6371000
+    la1, lo1, la2, lo2 = (_math.radians(x) for x in [a[0], a[1], b[0], b[1]])
+    h = (_math.sin((la2 - la1) / 2) ** 2 +
+         _math.cos(la1) * _math.cos(la2) * _math.sin((lo2 - lo1) / 2) ** 2)
+    return 2 * R * _math.asin(_math.sqrt(h))
+
+
+def _survey_loop():
+    while True:
+        if _survey["on"]:
+            g = _gps.data
+            if g.get("fix"):
+                last = _survey["last"]
+                moved = 999 if last is None else _haversine(last, (g["lat"], g["lon"]))
+                if moved >= _survey["min_dist_m"]:
+                    _survey["last"] = (g["lat"], g["lon"])
+                    _track_store.add_poi("soil", g["lat"], g["lon"],
+                                         {"moisture": _soil.read_percent()})
+                    try:
+                        f = _rgb_cam.read()
+                        if f is not None:
+                            _track_store.add_poi("weed", g["lat"], g["lon"],
+                                                  _analyze_frame(f))
+                    except Exception:
+                        pass
+        _time_mod.sleep(0.5)
+
+
+threading.Thread(target=_survey_loop, name="SurveyLoop", daemon=True).start()
+
+
+@app.route("/api/soil/read")
+def soil_read():
+    return jsonify({"ok": True, "moisture": _soil.read_percent(),
+                    "simulate": _soil.simulate})
+
+
+@app.route("/api/soil/sample", methods=["POST"])
+def soil_sample():
+    g = _gps.data
+    if not g.get("fix"):
+        return jsonify({"ok": False, "error": "no gps fix"})
+    pct = _soil.read_percent()
+    poi = _track_store.add_poi("soil", g["lat"], g["lon"], {"moisture": pct})
+    return jsonify({"ok": True, "poi": poi})
+
+
+@app.route("/api/weeds/sample", methods=["POST"])
+def weeds_sample():
+    frame = _rgb_cam.read()
+    if frame is None:
+        return jsonify({"ok": False, "error": "no camera frame"})
+    res = _analyze_frame(frame)
+    cls = _classify_weed(frame)
+    if cls:
+        res["weed"] = cls[0]
+        res["conf"] = cls[1]
+    g = _gps.data
+    if not g.get("fix"):
+        return jsonify({"ok": True, "analysis": res, "mapped": False})
+    poi = _track_store.add_poi("weed", g["lat"], g["lon"], res)
+    return jsonify({"ok": True, "analysis": res, "poi": poi})
+
+
+@app.route("/api/survey/<state>", methods=["POST"])
+def survey_toggle(state):
+    _survey["on"] = (state == "on")
+    if state == "on":
+        _survey["last"] = None
+    return jsonify({"ok": True, "survey": _survey["on"]})
+
+
+@app.route("/api/survey/status")
+def survey_status():
+    return jsonify({
+        "on": _survey["on"],
+        "min_dist_m": _survey["min_dist_m"],
+        "soil_simulate": _soil.simulate,
+        "gps_simulate": _gps.simulate,
+        "lidar_simulate": _lidar.simulate,
+        "cam_ready": _rgb_cam.backend is not None
+    })
+
+
+# ════════════════════════════════════════════════════════════════
+# ── خطة 05: الداشبورد الجديد (يستبدل الصفحة الرئيسية) ──
+# ════════════════════════════════════════════════════════════════
+@app.route("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
+
+
+@app.route("/legacy")
+def legacy_controller():
+    """الواجهة القديمة — للرجوع إليها إن لزم."""
+    return render_template("spider_gait_controller.html")
+
+
+# ── تحديث الصفحة الرئيسية لتفتح الداشبورد مباشرة ──
+@app.route("/", endpoint="root_dashboard")
+def root_dashboard():
+    return render_template("dashboard.html")
+
+
+# ════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print(f"Hardware: {'CONNECTED' if HARDWARE else 'SIMULATION MODE'}")
     print(f"IMU (BNO085): {'READY' if BNO_READY else 'NOT FOUND'}")

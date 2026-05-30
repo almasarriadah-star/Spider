@@ -30,7 +30,7 @@ def reload_motion():
     """إعادة تحميل motion.json حياً بلا إعادة تشغيل السيرفر."""
     global _motion
     _motion = _load_motion()
-    print("[gaits] motion.json reloaded:", _motion)
+    print("[gaits] motion.json reloaded")
 
 
 # ────── Easing Functions ──────

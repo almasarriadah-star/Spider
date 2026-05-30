@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0d0d0f">
+<title>🕷️ Spider Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0d0d0f;color:#e0e0e0;font-family:'Segoe UI',Tahoma,sans-serif;
+     display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+/* ── شريط علوي ثابت ── */
+header{display:flex;align-items:center;gap:8px;padding:8px 12px;
+       background:#131318;border-bottom:1px solid #222;flex-shrink:0;flex-wrap:wrap}
+.logo{font-size:16px;font-weight:800;color:#58a6ff;margin-left:auto}
+.logo span{color:#3fb950}
+.status-chip{font-size:11px;padding:3px 8px;border-radius:12px;border:1px solid #333;
+             background:#0d0d0f;white-space:nowrap}
+.chip-on{color:#3fb950;border-color:#1a8a44}
+.chip-off{color:#f85149;border-color:#5c0a0a}
+.chip-warn{color:#f0883e;border-color:#8a5a1a}
+
+/* ── زر الطوارئ ── */
+#estopBtn{background:#8a0000;color:#fff;border:2px solid #ff0000;border-radius:10px;
+          padding:8px 14px;font-size:13px;font-weight:900;cursor:pointer;
+          animation:pulse-stop 2s infinite;white-space:nowrap}
+#estopBtn.cleared{background:#0a5c2e;border-color:#3fb950;animation:none}
+@keyframes pulse-stop{0%,100%{box-shadow:0 0 0 0 rgba(255,0,0,.3)}50%{box-shadow:0 0 10px 4px rgba(255,0,0,.15)}}
+
+/* ── تبويبات ── */
+.tabs{display:flex;background:#131318;border-bottom:2px solid #222;flex-shrink:0}
+.tab{flex:1;padding:10px 4px;text-align:center;font-size:12px;font-weight:700;
+     color:#666;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;
+     transition:color .15s,border-color .15s;-webkit-tap-highlight-color:transparent}
+.tab.active{color:#58a6ff;border-bottom-color:#58a6ff}
+.tab:hover{color:#aaa}
+
+/* ── محتوى التبويبات ── */
+.tab-content{flex:1;overflow-y:auto;padding:8px;display:none}
+.tab-content.active{display:block}
+
+/* ── بطاقات ── */
+.card{background:#131318;border:1px solid #222;border-radius:12px;padding:12px;margin-bottom:8px}
+.card h3{color:#58a6ff;font-size:13px;margin-bottom:10px;text-align:center}
+.section-title{color:#888;font-size:11px;margin-bottom:6px;text-align:center}
+
+/* ── أزرار ── */
+.btn{display:inline-flex;align-items:center;justify-content:center;border:none;
+     border-radius:9px;cursor:pointer;font-weight:700;transition:all .1s;
+     min-height:40px;padding:0 12px;-webkit-tap-highlight-color:transparent;font-size:13px}
+.btn:active{transform:scale(.94)}
+.btn-green{background:#0a5c2e;color:#fff;border:1px solid #1a8a44}
+.btn-red  {background:#5c0a0a;color:#fff;border:1px solid #8a1a1a}
+.btn-blue {background:#0a1a5c;color:#58a6ff;border:1px solid #1a3a8a}
+.btn-purple{background:#2a0a5c;color:#d2a8ff;border:1px solid #4a1a8a}
+.btn-orange{background:#5c3a0a;color:#f0883e;border:1px solid #8a5a1a}
+.btn-gray {background:#1a1a1a;color:#888;border:1px solid #333}
+.btn:disabled{opacity:.35;cursor:default;transform:none!important}
+.btn-full{width:100%}
+
+/* ── شبكة الأزرار ── */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+
+/* ── جوي ستيك ── */
+.joy-wrap{display:flex;gap:16px;align-items:center;justify-content:center;flex-wrap:wrap}
+#joyCanvas{touch-action:none;cursor:grab;border-radius:50%;display:block}
+#joyCanvas:active{cursor:grabbing}
+.joy-controls{display:flex;flex-direction:column;gap:8px;min-width:140px}
+.slider-row{display:flex;align-items:center;gap:8px;font-size:12px}
+.slider-row label{color:#888;min-width:48px;text-align:left}
+input[type=range]{flex:1;accent-color:#58a6ff;height:4px;cursor:pointer}
+
+/* ── حالة المشي ── */
+#gaitStatus{text-align:center;font-size:11px;color:#666;padding:6px;
+            background:#0d0d0f;border-radius:8px;border:1px solid #1a1a1a}
+#gaitStatus .on{color:#3fb950}
+#gaitStatus .stop{color:#f85149}
+
+/* ── حركات استعراضية ── */
+.move-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:5px}
+.move-btn{padding:8px 6px;font-size:11px;text-align:center;border-radius:8px;
+          border:1px solid #2a2a4a;background:#131318;color:#d2a8ff;cursor:pointer;
+          transition:all .1s;-webkit-tap-highlight-color:transparent}
+.move-btn:active{transform:scale(.93)}
+.move-btn:hover{background:#1a1a2e;border-color:#4a1a8a}
+.move-btn.busy{opacity:.3;cursor:default;transform:none!important}
+
+/* ── سيرفو ── */
+.servo-row{display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:12px}
+.servo-row label{color:#888;min-width:60px}
+.servo-row input[type=range]{flex:1;accent-color:#58a6ff}
+.servo-row span{color:#3fb950;min-width:30px;text-align:center}
+
+/* ── حساسات ── */
+.sensor-val{background:#0d0d0f;border:1px solid #1a1a1a;border-radius:8px;
+             padding:8px;text-align:center}
+.sensor-val .label{font-size:10px;color:#666}
+.sensor-val .num{font-size:22px;font-weight:700;color:#58a6ff}
+
+/* ── رادار الليدار ── */
+#radarCanvas{display:block;margin:0 auto;border-radius:12px;background:#05080a}
+
+/* ── إعدادات ── */
+.cfg-editor textarea{width:100%;height:260px;font-family:monospace;font-size:11px;
+  background:#0d0d0f;color:#e0e0e0;border:1px solid #333;border-radius:8px;
+  padding:8px;resize:vertical}
+select{background:#131318;color:#e0e0e0;border:1px solid #333;border-radius:8px;
+       padding:6px 10px;font-size:12px;cursor:pointer}
+</style>
+</head>
+<body>
+
+<!-- ╔══════════ شريط علوي ══════════╗ -->
+<header>
+  <button id="estopBtn" onclick="triggerEstop()">⛔ طوارئ</button>
+  <span class="status-chip" id="chipHW">HW: --</span>
+  <span class="status-chip" id="chipGait">توقّف</span>
+  <span class="status-chip" id="chipGPS">GPS: --</span>
+  <span class="status-chip" id="chipCam">📷 --</span>
+  <div class="logo">🕷️ Spider <span>Dashboard</span></div>
+</header>
+
+<!-- ╔══════════ تبويبات ══════════╗ -->
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('ctrl')">🕹️ تحكّم</div>
+  <div class="tab" onclick="switchTab('moves')">🤸 حركات</div>
+  <div class="tab" onclick="switchTab('sensors')">📡 حساسات</div>
+  <div class="tab" onclick="switchTab('settings')">⚙️ إعدادات</div>
+</div>
+
+<!-- ╔══════════ تبويب 1: تحكّم ══════════╗ -->
+<div id="tab-ctrl" class="tab-content active">
+
+  <!-- حالة المشي -->
+  <div id="gaitStatus" class="card">جاهز — استخدم الجوي ستيك أو الأزرار للتحرّك</div>
+
+  <!-- جوي ستيك -->
+  <div class="card">
+    <h3>🕹️ عصا التحكّم</h3>
+    <div class="joy-wrap">
+      <canvas id="joyCanvas" width="200" height="200"></canvas>
+      <div class="joy-controls">
+        <div class="slider-row">
+          <label>السرعة</label>
+          <input type="range" id="speedSlider" min="0.3" max="2.0" step="0.1" value="1.0">
+          <span id="speedVal" style="color:#3fb950;min-width:28px">1.0</span>
+        </div>
+        <div class="slider-row">
+          <label>دوران</label>
+          <input type="range" id="omegaSlider" min="-1" max="1" step="0.05" value="0">
+          <span id="omegaVal" style="color:#f0883e;min-width:28px">0</span>
+        </div>
+        <select id="gaitSel" style="width:100%">
+          <option value="forward">تقدّم (Tripod)</option>
+          <option value="backward">تراجع</option>
+          <option value="glide">انزلاق سريع</option>
+          <option value="climb">تسلّق</option>
+          <option value="prowl">تسلّل</option>
+          <option value="high_step">خطوة عالية</option>
+          <option value="creep">زحف بطيء</option>
+        </select>
+        <button class="btn btn-red btn-full" onclick="stopGait()" style="margin-top:4px">
+          ⏹ وقوف
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- أزرار اتجاهات تكميلية -->
+  <div class="card">
+    <h3>🧭 اتجاهات سريعة</h3>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;max-width:220px;margin:0 auto">
+      <div></div>
+      <button class="btn btn-blue" ontouchstart="quickGait('forward',1)" onmousedown="quickGait('forward',1)"
+              ontouchend="stopGait()" onmouseup="stopGait()">▲</button>
+      <div></div>
+      <button class="btn btn-blue" ontouchstart="quickGait('rotate_ccw',0.7)" onmousedown="quickGait('rotate_ccw',0.7)"
+              ontouchend="stopGait()" onmouseup="stopGait()">↺</button>
+      <button class="btn btn-gray" onclick="stopGait()">■</button>
+      <button class="btn btn-blue" ontouchstart="quickGait('rotate_cw',0.7)" onmousedown="quickGait('rotate_cw',0.7)"
+              ontouchend="stopGait()" onmouseup="stopGait()">↻</button>
+      <button class="btn btn-blue" ontouchstart="quickGait('shift_left',0.7)" onmousedown="quickGait('shift_left',0.7)"
+              ontouchend="stopGait()" onmouseup="stopGait()">◄</button>
+      <button class="btn btn-blue" ontouchstart="quickGait('backward',1)" onmousedown="quickGait('backward',1)"
+              ontouchend="stopGait()" onmouseup="stopGait()">▼</button>
+      <button class="btn btn-blue" ontouchstart="quickGait('shift_right',0.7)" onmousedown="quickGait('shift_right',0.7)"
+              ontouchend="stopGait()" onmouseup="stopGait()">►</button>
+    </div>
+    <div class="grid2" style="margin-top:8px">
+      <button class="btn btn-purple" onclick="gaOnce('rotate_cw',4)">↻ 90°</button>
+      <button class="btn btn-purple" onclick="gaOnce('rotate_ccw',4)">↺ 90°</button>
+    </div>
+  </div>
+
+  <!-- وضعيات الجسم -->
+  <div class="card">
+    <h3>🦾 وضعية الجسم</h3>
+    <div class="grid3">
+      <button class="btn btn-green btn-full" onclick="bodyMv('stand')">وقوف</button>
+      <button class="btn btn-blue  btn-full" onclick="bodyMv('up')">ارتفاع</button>
+      <button class="btn btn-blue  btn-full" onclick="bodyMv('down')">انخفاض</button>
+      <button class="btn btn-orange btn-full" onclick="bodyMv('lean_fwd')">أمام</button>
+      <button class="btn btn-orange btn-full" onclick="bodyMv('lean_back')">خلف</button>
+      <button class="btn btn-orange btn-full" onclick="bodyMv('lean_left')">يسار</button>
+      <button class="btn btn-orange btn-full" onclick="bodyMv('lean_right')">يمين</button>
+      <button class="btn btn-purple btn-full" onclick="bodyMv('tilt_left')">ميل يسار</button>
+      <button class="btn btn-purple btn-full" onclick="bodyMv('tilt_right')">ميل يمين</button>
+    </div>
+  </div>
+
+  <!-- إيقاف وتشغيل المحركات -->
+  <div class="card">
+    <div class="grid2">
+      <button class="btn btn-red  btn-full" onclick="apiFetch('/api/estop/clear','POST').then(loadStatus)">✅ إلغاء الطوارئ</button>
+      <button class="btn btn-gray btn-full" onclick="apiFetch('/api/off','POST')">🔌 إطفاء المحركات</button>
+    </div>
+  </div>
+</div>
+
+<!-- ╔══════════ تبويب 2: حركات ══════════╗ -->
+<div id="tab-moves" class="tab-content">
+  <div class="card">
+    <h3>🎭 حركات استعراضية <span id="moveBusyNote" style="font-size:10px;color:#666"></span></h3>
+    <div class="move-grid" id="specialGrid"></div>
+  </div>
+
+  <div class="card">
+    <h3>🚶 أنماط مشي متقدّمة</h3>
+    <div class="grid2">
+      <button class="btn btn-blue" onclick="startGait('ripple','forward')">Ripple أمام</button>
+      <button class="btn btn-blue" onclick="startGait('ripple','backward')">Ripple خلف</button>
+      <button class="btn btn-purple" onclick="startGait('smooth-ripple','forward')">Smooth Ripple</button>
+      <button class="btn btn-purple" onclick="startGait('smooth-ripple','backward')">S.Ripple خلف</button>
+      <button class="btn btn-orange" onclick="gaOnce('forward',2,'glide')">انزلاق 2دورة</button>
+      <button class="btn btn-orange" onclick="gaOnce('forward',4,'creep')">زحف 4دورات</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>🦀 حركة جانبية</h3>
+    <div class="grid2">
+      <button class="btn btn-blue" onclick="startGait('forward','forward','shift_left')">◄◄ يسار</button>
+      <button class="btn btn-blue" onclick="startGait('forward','forward','shift_right')">يمين ►►</button>
+      <button class="btn btn-orange" onclick="startGait('forward','forward','crab_walk')">سرطان</button>
+      <button class="btn btn-gray" onclick="stopGait()">⏹ وقوف</button>
+    </div>
+  </div>
+</div>
+
+<!-- ╔══════════ تبويب 3: حساسات ══════════╗ -->
+<div id="tab-sensors" class="tab-content">
+
+  <!-- كاميرات -->
+  <div class="card">
+    <h3>📷 الكاميرات <span id="camStatusTxt" style="font-size:10px;color:#666"></span></h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
+      <div style="text-align:center">
+        <div class="section-title">عادية (RGB)</div>
+        <img id="rgbView" src="/video/rgb"
+             style="width:100%;max-width:300px;border-radius:8px;background:#111;display:block"
+             onerror="this.style.background='#1a0a0a';this.alt='⛔ الكاميرا غير متصلة'">
+      </div>
+      <div style="text-align:center">
+        <div class="section-title">حرارية</div>
+        <img id="thView" src="/video/thermal"
+             style="width:100%;max-width:300px;border-radius:8px;background:#111;display:block"
+             onerror="this.style.background='#1a0a0a';this.alt='⛔ الكاميرا الحرارية غير متصلة'">
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:8px">
+      <label style="font-size:12px;cursor:pointer">
+        <input type="checkbox" id="overlayCheck" onchange="toggleOverlay()"> دمج حراري فوق العادية
+      </label>
+    </div>
+    <div id="overlayWrap" style="display:none;position:relative;max-width:300px;margin:8px auto">
+      <img src="/video/rgb" style="width:100%;border-radius:8px">
+      <img src="/video/thermal" style="width:100%;border-radius:8px;position:absolute;
+           top:0;right:0;opacity:0.45;mix-blend-mode:screen">
+    </div>
+  </div>
+
+  <!-- ليدار -->
+  <div class="card">
+    <h3>📡 الليدار (360°) <span id="lidarStatusTxt" style="font-size:10px;color:#666"></span></h3>
+    <canvas id="radarCanvas" width="280" height="280"></canvas>
+    <div style="text-align:center;margin-top:8px">
+      <button class="btn btn-blue" onclick="lidarProject()">📍 أسقِط على الخريطة</button>
+      <a class="btn btn-purple" href="/map" target="_blank" style="margin-right:6px">🗺️ الخريطة</a>
+    </div>
+  </div>
+
+  <!-- رطوبة + أعشاب -->
+  <div class="card">
+    <h3>🌱 المسح الزراعي</h3>
+    <div class="grid2" style="margin-bottom:10px">
+      <div class="sensor-val">
+        <div class="label">الرطوبة الآن</div>
+        <div class="num" id="soilNow" style="color:#58a6ff">--%</div>
+      </div>
+      <div class="sensor-val">
+        <div class="label">خطر النبات</div>
+        <div class="num" id="weedNow" style="color:#f0883e">--</div>
+      </div>
+    </div>
+    <div class="grid2">
+      <button class="btn btn-blue  btn-full" onclick="soilSample()">💧 قِس رطوبة هنا</button>
+      <button class="btn btn-green btn-full" onclick="weedSample()">🌿 حلّل عشب هنا</button>
+      <button class="btn btn-orange btn-full" id="survBtn" onclick="toggleSurvey()">▶ مسح آلي</button>
+      <a class="btn btn-purple btn-full" href="/map" target="_blank">🗺️ الخريطة</a>
+    </div>
+    <div id="surveyStatusTxt" style="font-size:11px;color:#666;text-align:center;margin-top:6px"></div>
+  </div>
+
+  <!-- IMU -->
+  <div class="card">
+    <h3>🧭 IMU / البوصلة</h3>
+    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+      <div class="sensor-val"><div class="label">Roll</div>
+        <div class="num" id="imuRoll" style="color:#58a6ff">--</div></div>
+      <div class="sensor-val"><div class="label">Pitch</div>
+        <div class="num" id="imuPitch" style="color:#3fb950">--</div></div>
+      <div class="sensor-val"><div class="label">Yaw</div>
+        <div class="num" id="imuYaw" style="color:#f0883e">--</div></div>
+    </div>
+    <div class="grid2" style="margin-top:8px">
+      <button class="btn btn-blue btn-full" onclick="apiFetch('/api/imu/zero','POST')">↺ صفّر IMU</button>
+      <button class="btn btn-gray btn-full" id="imuStreamBtn" onclick="toggleImuStream()">▶ تشغيل IMU</button>
+    </div>
+  </div>
+</div>
+
+<!-- ╔══════════ تبويب 4: إعدادات ══════════╗ -->
+<div id="tab-settings" class="tab-content">
+
+  <!-- توازن -->
+  <div class="card">
+    <h3>⚖️ نظام التوازن</h3>
+    <div class="grid2">
+      <button class="btn btn-green btn-full" onclick="apiFetch('/api/balance/start','POST').then(loadStatus)">▶ تشغيل</button>
+      <button class="btn btn-red   btn-full" onclick="apiFetch('/api/balance/stop','POST').then(loadStatus)">■ إيقاف</button>
+    </div>
+    <div style="margin-top:8px">
+      <div class="slider-row">
+        <label>Kp</label>
+        <input type="range" id="kpSlider" min="0" max="5" step="0.1" value="1.2" oninput="tunePID()">
+        <span id="kpVal" style="color:#3fb950;min-width:32px">1.2</span>
+      </div>
+      <div class="slider-row">
+        <label>Ki</label>
+        <input type="range" id="kiSlider" min="0" max="1" step="0.01" value="0.0" oninput="tunePID()">
+        <span id="kiVal" style="color:#3fb950;min-width:32px">0.0</span>
+      </div>
+      <div class="slider-row">
+        <label>Kd</label>
+        <input type="range" id="kdSlider" min="0" max="2" step="0.05" value="0.3" oninput="tunePID()">
+        <span id="kdVal" style="color:#3fb950;min-width:32px">0.3</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- محرّر الإعدادات -->
+  <div class="card cfg-editor">
+    <h3>🔧 محرّر الإعدادات</h3>
+    <div class="slider-row" style="margin-bottom:8px">
+      <select id="cfgFile" onchange="loadCfg()" style="flex:1">
+        <option value="motion">motion</option>
+        <option value="gait_params">gaits</option>
+        <option value="ripple_gait_params">ripple</option>
+        <option value="balance_config">balance</option>
+        <option value="servo_limits">servo limits</option>
+      </select>
+    </div>
+    <div id="cfgEditor"><textarea id="cfgText" placeholder="جاري التحميل..."></textarea></div>
+    <div class="grid2" style="margin-top:6px">
+      <button class="btn btn-green btn-full" onclick="saveCfg()">💾 حفظ</button>
+      <button class="btn btn-gray  btn-full" onclick="restoreCfg()">↩️ استعادة</button>
+    </div>
+    <div id="cfgMsg" style="font-size:11px;color:#666;text-align:center;margin-top:4px"></div>
+  </div>
+
+  <!-- Easing -->
+  <div class="card">
+    <h3>🎢 نمط النعومة (Easing)</h3>
+    <div class="grid3">
+      <button class="btn btn-blue" onclick="setEasing('smoothstep')">Smoothstep</button>
+      <button class="btn btn-purple" onclick="setEasing('cosine')">Cosine</button>
+      <button class="btn btn-gray" onclick="setEasing('linear')">Linear</button>
+    </div>
+    <div id="easingStatus" style="font-size:11px;color:#666;text-align:center;margin-top:6px"></div>
+  </div>
+
+  <!-- روابط مفيدة -->
+  <div class="card">
+    <h3>🔗 روابط</h3>
+    <div class="grid2">
+      <a class="btn btn-gray btn-full" href="/gait"   target="_blank">الواجهة القديمة</a>
+      <a class="btn btn-gray btn-full" href="/map"    target="_blank">الخريطة</a>
+      <a class="btn btn-gray btn-full" href="/sim"    target="_blank">محاكاة 3D</a>
+      <a class="btn btn-gray btn-full" href="/legacy" target="_blank">Legacy</a>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ Scripts ════════════ -->
+<script>
+// ── Helpers ──
+async function apiFetch(url, method='GET', body=null){
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if(body) opts.body = JSON.stringify(body);
+  const r = await fetch(url, opts);
+  return r.json();
+}
+
+function switchTab(id){
+  document.querySelectorAll('.tab').forEach((t,i)=>{
+    const ids = ['ctrl','moves','sensors','settings'];
+    t.classList.toggle('active', ids[i]===id);
+  });
+  document.querySelectorAll('.tab-content').forEach(c=>{
+    c.classList.toggle('active', c.id==='tab-'+id);
+  });
+}
+
+// ── حالة عامة ──
+async function loadStatus(){
+  const d = await apiFetch('/api/health');
+  document.getElementById('chipHW').textContent   = 'HW: '+(d.hardware?'🟢':'🔴 SIM');
+  document.getElementById('chipHW').className     = 'status-chip '+(d.hardware?'chip-on':'chip-warn');
+  // estop
+  const gs = await apiFetch('/api/gait/forward/status');
+  const estopOn = gs.estop;
+  const estopBtn = document.getElementById('estopBtn');
+  if(estopOn){ estopBtn.textContent='✅ إلغاء الطوارئ'; estopBtn.className='cleared'; estopBtn.onclick=clearEstop; }
+  else       { estopBtn.textContent='⛔ طوارئ';          estopBtn.className='';        estopBtn.onclick=triggerEstop; }
+  const chip = document.getElementById('chipGait');
+  if(gs.running){ chip.textContent='يمشي 🟢'; chip.className='status-chip chip-on'; }
+  else if(estopOn){ chip.textContent='طوارئ ⛔'; chip.className='status-chip chip-off'; }
+  else { chip.textContent='توقّف'; chip.className='status-chip chip-gray'||'status-chip'; }
+  const gd = document.getElementById('gaitStatus');
+  if(estopOn) gd.innerHTML='<span class="stop">⛔ الطوارئ مفعّل — اضغط "إلغاء الطوارئ"</span>';
+  else if(gs.running) gd.innerHTML=`<span class="on">▶ يمشي — ${gs.current_phase||''}</span>`;
+  else gd.textContent='جاهز — استخدم الجوي ستيك أو الأزرار للتحرّك';
+}
+setInterval(loadStatus, 1500);
+loadStatus();
+
+// ── طوارئ ──
+async function triggerEstop(){ await apiFetch('/api/estop','POST'); loadStatus(); }
+async function clearEstop(){ await apiFetch('/api/estop/clear','POST'); loadStatus(); }
+
+// ════ جوي ستيك ════
+const jCv = document.getElementById('joyCanvas');
+const jx  = jCv.getContext('2d');
+const JR=90, JCX=100, JCY=100;
+let jActive=false, jvx=0, jvy=0, jSendTimer=null;
+
+function drawJoy(px,py){
+  jx.clearRect(0,0,200,200);
+  // حلقات
+  jx.strokeStyle='#1a2a2a'; jx.lineWidth=1.5;
+  for(const r of [90,60,30]){ jx.beginPath(); jx.arc(JCX,JCY,r,0,7); jx.stroke(); }
+  // خطوط محاور
+  jx.strokeStyle='#111'; jx.beginPath(); jx.moveTo(JCX-JR,JCY); jx.lineTo(JCX+JR,JCY); jx.stroke();
+  jx.beginPath(); jx.moveTo(JCX,JCY-JR); jx.lineTo(JCX,JCY+JR); jx.stroke();
+  // إبرة
+  const grad = jx.createRadialGradient(JCX+px,JCY+py,0,JCX+px,JCY+py,20);
+  grad.addColorStop(0,'#58a6ff'); grad.addColorStop(1,'#0a1a5c');
+  jx.fillStyle=grad; jx.beginPath(); jx.arc(JCX+px,JCY+py,20,0,7); jx.fill();
+  // نقطة المركز
+  jx.fillStyle='#333'; jx.beginPath(); jx.arc(JCX,JCY,4,0,7); jx.fill();
+}
+drawJoy(0,0);
+
+function jFromEvent(e){
+  const rect = jCv.getBoundingClientRect();
+  const t = e.touches ? e.touches[0] : e;
+  let dx = t.clientX-rect.left-JCX, dy = t.clientY-rect.top-JCY;
+  const dist = Math.hypot(dx,dy);
+  if(dist>JR){ dx*=JR/dist; dy*=JR/dist; }
+  drawJoy(dx,dy);
+  jvx = -(dy/JR);   // أعلى = أمام
+  jvy = -(dx/JR);   // يسار موجب
+}
+
+function jStartSend(){ if(!jSendTimer) jSendTimer=setInterval(jSendMove,120); }
+async function jSendMove(){
+  const speed = parseFloat(document.getElementById('speedSlider').value);
+  const om    = parseFloat(document.getElementById('omegaSlider').value);
+  await apiFetch('/api/move','POST',{vx:jvx*speed, vy:jvy*speed, omega:om*speed,
+                                     gait:document.getElementById('gaitSel').value});
+}
+function jRelease(){
+  jActive=false; jvx=0; jvy=0; drawJoy(0,0);
+  document.getElementById('omegaSlider').value=0;
+  document.getElementById('omegaVal').textContent='0';
+  clearInterval(jSendTimer); jSendTimer=null;
+  apiFetch('/api/move','POST',{vx:0,vy:0,omega:0});
+}
+['mousedown','touchstart'].forEach(ev=>jCv.addEventListener(ev,e=>{
+  jActive=true; jFromEvent(e); jStartSend(); e.preventDefault();
+},{passive:false}));
+['mousemove','touchmove'].forEach(ev=>jCv.addEventListener(ev,e=>{
+  if(jActive){jFromEvent(e); e.preventDefault();}
+},{passive:false}));
+['mouseup','touchend','mouseleave'].forEach(ev=>jCv.addEventListener(ev,jRelease));
+
+// مزلاج السرعة
+document.getElementById('speedSlider').addEventListener('input',function(){
+  document.getElementById('speedVal').textContent=parseFloat(this.value).toFixed(1);
+});
+document.getElementById('omegaSlider').addEventListener('input',function(){
+  document.getElementById('omegaVal').textContent=parseFloat(this.value).toFixed(2);
+});
+
+// ── أزرار الاتجاهات السريعة ──
+async function quickGait(type, spd){
+  const speed = parseFloat(document.getElementById('speedSlider').value) * spd;
+  const vMap = {forward:[1,0], backward:[-1,0], shift_left:[0,1], shift_right:[0,-1],
+                rotate_cw:[0,0], rotate_ccw:[0,0]};
+  const [vx,vy] = vMap[type] || [1,0];
+  const om = type==='rotate_cw' ? speed : type==='rotate_ccw' ? -speed : 0;
+  await apiFetch('/api/move','POST',{vx:vx*speed, vy:vy*speed, omega:om});
+}
+
+async function stopGait(){
+  await apiFetch('/api/gait/forward/stop','POST');
+  await apiFetch('/api/gait/ripple/stop','POST');
+  await apiFetch('/api/gait/smooth-ripple/stop','POST');
+  jRelease();
+}
+
+async function gaOnce(type, cycles, gtype=''){
+  await apiFetch('/api/gait/once','POST',{type: gtype||type, speed:1.0, cycles});
+}
+
+async function startGait(engine, dir, type=''){
+  const ep = engine==='ripple' ? '/api/gait/ripple/start' : '/api/gait/smooth-ripple/start';
+  await apiFetch(ep,'POST',{direction: type||dir, speed:1.0});
+}
+
+async function bodyMv(mv){
+  const r = await apiFetch('/api/body/move','POST',{move:mv, speed:1.0});
+  if(!r.ok) alert(r.error || 'busy');
+}
+
+// ── حركات استعراضية ──
+const SPECIALS = [
+  'wave','hi_five','dance','bow','shake','march','stretch',
+  'lean_fw','lean_bk','lean_l','lean_r','twerk','spin',
+  'intimidate','defensive','excited','sleepy','push_up',
+  'side_step','creep_fw','threat_display','salute','idle_sway'
+];
+const LABELS = {
+  wave:'👋 تلويح', hi_five:'🖐️ هاي فايف', dance:'💃 رقص', bow:'🙇 انحناء',
+  shake:'🤝 مصافحة', march:'🚶 مسير', stretch:'🙆 تمدّد', lean_fw:'↩️ أمام',
+  lean_bk:'↪️ خلف', lean_l:'↰ يسار', lean_r:'↱ يمين', twerk:'🍑 تويرك',
+  spin:'🌀 دوران', intimidate:'😤 تهديد', defensive:'🛡️ دفاع', excited:'🎉 متحمّس',
+  sleepy:'😴 نعسان', push_up:'💪 ضغط', side_step:'↔️ جانبي', creep_fw:'🐾 تسلّل',
+  threat_display:'⚠️ إنذار', salute:'✋ تحيّة', idle_sway:'🌊 تأرجح'
+};
+const sgrid = document.getElementById('specialGrid');
+SPECIALS.forEach(m=>{
+  const b = document.createElement('button');
+  b.className='move-btn'; b.textContent=LABELS[m]||m; b.dataset.move=m;
+  b.onclick=async()=>{
+    const r=await apiFetch('/api/special/'+m,'POST',{speed:1.0});
+    if(!r.ok) alert(r.error||'busy');
+  };
+  sgrid.appendChild(b);
+});
+
+async function refreshMoveBtns(){
+  const s = await apiFetch('/api/gait/forward/status');
+  const busy = s.running || s.estop;
+  document.querySelectorAll('.move-btn').forEach(b=>{
+    b.classList.toggle('busy',busy); b.disabled=busy;
+  });
+  document.getElementById('moveBusyNote').textContent = busy ? '(متوقف — انتظر انتهاء المشي)' : '';
+}
+setInterval(refreshMoveBtns,800); refreshMoveBtns();
+
+// ════ رادار الليدار ════
+const rc = document.getElementById('radarCanvas');
+const rx = rc.getContext('2d');
+const RC=140, MAXD=3000;
+async function drawRadar(){
+  try{
+    const d = await apiFetch('/api/lidar/scan');
+    document.getElementById('lidarStatusTxt').textContent =
+      d.ready ? `🟢 ${Object.keys(d.scan).length} نقطة` : '🔴 غير متصل (محاكاة)';
+    rx.clearRect(0,0,280,280);
+    rx.strokeStyle='#1a2a2a'; rx.lineWidth=1;
+    for(const r of [35,70,105,140]){ rx.beginPath(); rx.arc(RC,RC,r,0,7); rx.stroke(); }
+    rx.fillStyle='#3fb950'; rx.beginPath(); rx.arc(RC,RC,5,0,7); rx.fill();
+    rx.fillStyle='#f0883e';
+    for(const [a,dist] of Object.entries(d.scan)){
+      const rr=Math.min(dist/MAXD,1)*RC;
+      const ang=(parseInt(a)-90)*Math.PI/180;
+      rx.beginPath(); rx.arc(RC+rr*Math.cos(ang),RC+rr*Math.sin(ang),2,0,7); rx.fill();
+    }
+  }catch(e){}
+}
+setInterval(()=>{ if(document.getElementById('tab-sensors').classList.contains('active')) drawRadar(); },250);
+
+async function lidarProject(){
+  const r=await apiFetch('/api/lidar/project','POST');
+  alert(r.ok?`أُضيفت ${r.added} عائق للخريطة`:'خطأ: '+(r.error||''));
+}
+
+// ════ حساسات التربة والكاميرا ════
+async function soilNow(){
+  const d=await apiFetch('/api/soil/read');
+  if(d.ok) document.getElementById('soilNow').textContent=d.moisture+'%';
+}
+async function soilSample(){
+  const r=await apiFetch('/api/soil/sample','POST');
+  alert(r.ok?`رطوبة ${r.poi?.props?.moisture}% — أُضيفت للخريطة`:'لا إشارة GPS');
+}
+async function weedSample(){
+  const r=await apiFetch('/api/weeds/sample','POST');
+  if(r.ok){
+    document.getElementById('weedNow').textContent=r.analysis.risk;
+    alert('خطر: '+r.analysis.risk+'\nأخضر: '+(r.analysis.green_ratio*100).toFixed(1)+'%'+
+          (r.mapped===false?' (بلا GPS)':' — أُضيف للخريطة'));
+  } else alert(r.error||'خطأ');
+}
+let surveyOn=false;
+async function toggleSurvey(){
+  surveyOn=!surveyOn;
+  await apiFetch('/api/survey/'+(surveyOn?'on':'off'),'POST');
+  document.getElementById('survBtn').textContent=surveyOn?'⏹ إيقاف المسح':'▶ مسح آلي';
+  document.getElementById('surveyStatusTxt').textContent=surveyOn?'✅ المسح الآلي شغّال':'';
+}
+setInterval(soilNow,3000); soilNow();
+
+// ════ GPS chip ════
+async function gpsStatus(){
+  try{
+    const d=await apiFetch('/api/gps/now');
+    const chip=document.getElementById('chipGPS');
+    if(d.fix){
+      chip.textContent=`GPS 🟢${d.simulate?'(S)':''}`;
+      chip.className='status-chip chip-on';
+    } else {
+      chip.textContent='GPS ⏳'; chip.className='status-chip chip-warn';
+    }
+  }catch(e){}
+}
+setInterval(gpsStatus,2000); gpsStatus();
+
+// ════ كاميرا chip ════
+async function camStatus(){
+  try{
+    const d=await apiFetch('/api/cameras/status');
+    document.getElementById('chipCam').textContent=`📷 ${d.rgb?'🟢':'🔴'}`;
+    document.getElementById('camStatusTxt').textContent=`RGB:${d.rgb?'🟢':'🔴'} حراري:${d.thermal?'🟢':'🔴'}`;
+  }catch(e){}
+}
+setInterval(camStatus,5000); camStatus();
+
+function toggleOverlay(){
+  const on=document.getElementById('overlayCheck').checked;
+  document.getElementById('overlayWrap').style.display=on?'':'none';
+}
+
+// ════ IMU ════
+let imuStream=null, imuStreamOn=false;
+async function toggleImuStream(){
+  imuStreamOn=!imuStreamOn;
+  document.getElementById('imuStreamBtn').textContent=imuStreamOn?'■ إيقاف IMU':'▶ تشغيل IMU';
+  if(imuStreamOn) startImuPoll(); else stopImuPoll();
+}
+let imuTimer=null;
+function startImuPoll(){
+  imuTimer=setInterval(async()=>{
+    const d=await apiFetch('/api/imu/read');
+    if(d.ok){
+      document.getElementById('imuRoll').textContent=(d.roll||0).toFixed(1)+'°';
+      document.getElementById('imuPitch').textContent=(d.pitch||0).toFixed(1)+'°';
+      document.getElementById('imuYaw').textContent=(d.yaw||0).toFixed(1)+'°';
+    }
+  },300);
+}
+function stopImuPoll(){ clearInterval(imuTimer); }
+
+// ════ PID ════
+async function tunePID(){
+  const kp=parseFloat(document.getElementById('kpSlider').value);
+  const ki=parseFloat(document.getElementById('kiSlider').value);
+  const kd=parseFloat(document.getElementById('kdSlider').value);
+  document.getElementById('kpVal').textContent=kp.toFixed(1);
+  document.getElementById('kiVal').textContent=ki.toFixed(2);
+  document.getElementById('kdVal').textContent=kd.toFixed(2);
+  await apiFetch('/api/balance/tune','POST',{kp,ki,kd});
+}
+
+// ════ Config Editor ════
+let curCfgName='motion', curCfg={};
+async function loadCfg(){
+  curCfgName=document.getElementById('cfgFile').value;
+  document.getElementById('cfgMsg').textContent='';
+  try{
+    curCfg=await apiFetch('/api/config/'+curCfgName);
+    document.getElementById('cfgText').value=JSON.stringify(curCfg,null,2);
+  }catch(e){ document.getElementById('cfgText').value='خطأ في التحميل'; }
+}
+async function saveCfg(){
+  try{
+    const body=JSON.parse(document.getElementById('cfgText').value);
+    const r=await apiFetch('/api/config/'+curCfgName,'POST',body);
+    document.getElementById('cfgMsg').textContent=r.ok?'✅ حُفظ':'❌ '+(r.error||'خطأ');
+  }catch(e){ document.getElementById('cfgMsg').textContent='❌ JSON غير صحيح'; }
+}
+async function restoreCfg(){
+  const r=await apiFetch('/api/config/'+curCfgName+'/restore','POST');
+  if(r.ok) loadCfg();
+  document.getElementById('cfgMsg').textContent=r.ok?'↩️ استُعيد':'❌ لا نسخة احتياطية';
+}
+async function setEasing(name){
+  const r=await apiFetch('/api/easing/set','POST',{easing:name});
+  document.getElementById('easingStatus').textContent=r.ok?'✅ '+name:'❌ '+r.error;
+}
+loadCfg();
+</script>
+</body>
+</html>
