@@ -1908,10 +1908,10 @@ def _run_smooth_ripple(params, speed=1.0, max_cycles=0, direction='forward'):
             if balance.enabled and femur_lift < 0.5:
                 balance_off = balance.femur_offsets.get(leg_name, 0.0)
 
-            # حساب الزوايا النهائية
-            coxa_target = leg["coxa_stand"] + coxa_off * COXA_DIRECTION[leg_name] * sign + coxa_body_offset
-            femur_target = leg["femur_stand"] + femur_lift * FEMUR_DIRECTION[leg_name] * (-1) + balance_off
-            tibia_target = leg["tibia"] + tibia_off * TIBIA_DIRECTION[leg_name]
+            # حساب الزوايا النهائية — نفس منطق الـ Ripple العادي
+            coxa_target = leg["coxa_stand"] + coxa_off * sign + coxa_body_offset
+            femur_target = leg["femur_stand"] + femur_lift + balance_off
+            tibia_target = leg["tibia"] - femur_lift * 0.4
 
             # حدود أمان
             coxa_target = max(50, min(130, round(coxa_target)))
