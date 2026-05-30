@@ -192,8 +192,8 @@ select{background:#131318;color:#e0e0e0;border:1px solid #333;border-radius:8px;
               ontouchend="stopGait()" onmouseup="stopGait()">►</button>
     </div>
     <div class="grid2" style="margin-top:8px">
-      <button class="btn btn-purple" onclick="gaOnce('rotate_cw',4)">↻ 90°</button>
-      <button class="btn btn-purple" onclick="gaOnce('rotate_ccw',4)">↺ 90°</button>
+      <button class="btn btn-purple" onclick="gaOnce('turn_right',4)">↻ 90°</button>
+      <button class="btn btn-purple" onclick="gaOnce('turn_left',4)">↺ 90°</button>
     </div>
   </div>
 
@@ -202,14 +202,14 @@ select{background:#131318;color:#e0e0e0;border:1px solid #333;border-radius:8px;
     <h3>🦾 وضعية الجسم</h3>
     <div class="grid3">
       <button class="btn btn-green btn-full" onclick="bodyMv('stand')">وقوف</button>
-      <button class="btn btn-blue  btn-full" onclick="bodyMv('up')">ارتفاع</button>
-      <button class="btn btn-blue  btn-full" onclick="bodyMv('down')">انخفاض</button>
-      <button class="btn btn-orange btn-full" onclick="bodyMv('lean_fwd')">أمام</button>
+      <button class="btn btn-blue  btn-full" onclick="bodyMv('body_up')">ارتفاع</button>
+      <button class="btn btn-blue  btn-full" onclick="bodyMv('body_down')">انخفاض</button>
+      <button class="btn btn-orange btn-full" onclick="bodyMv('lean_forward')">أمام</button>
       <button class="btn btn-orange btn-full" onclick="bodyMv('lean_back')">خلف</button>
       <button class="btn btn-orange btn-full" onclick="bodyMv('lean_left')">يسار</button>
       <button class="btn btn-orange btn-full" onclick="bodyMv('lean_right')">يمين</button>
-      <button class="btn btn-purple btn-full" onclick="bodyMv('tilt_left')">ميل يسار</button>
-      <button class="btn btn-purple btn-full" onclick="bodyMv('tilt_right')">ميل يمين</button>
+      <button class="btn btn-purple btn-full" onclick="bodyMv('twist_left')">لف يسار</button>
+      <button class="btn btn-purple btn-full" onclick="bodyMv('twist_right')">لف يمين</button>
     </div>
   </div>
 
@@ -232,21 +232,21 @@ select{background:#131318;color:#e0e0e0;border:1px solid #333;border-radius:8px;
   <div class="card">
     <h3>🚶 أنماط مشي متقدّمة</h3>
     <div class="grid2">
-      <button class="btn btn-blue" onclick="startGait('ripple','forward')">Ripple أمام</button>
-      <button class="btn btn-blue" onclick="startGait('ripple','backward')">Ripple خلف</button>
-      <button class="btn btn-purple" onclick="startGait('smooth-ripple','forward')">Smooth Ripple</button>
-      <button class="btn btn-purple" onclick="startGait('smooth-ripple','backward')">S.Ripple خلف</button>
-      <button class="btn btn-orange" onclick="gaOnce('forward',2,'glide')">انزلاق 2دورة</button>
-      <button class="btn btn-orange" onclick="gaOnce('forward',4,'creep')">زحف 4دورات</button>
+      <button class="btn btn-blue" onclick="startRipple('ripple','forward')">Ripple أمام</button>
+      <button class="btn btn-blue" onclick="startRipple('ripple','backward')">Ripple خلف</button>
+      <button class="btn btn-purple" onclick="startRipple('smooth-ripple','forward')">Smooth Ripple</button>
+      <button class="btn btn-purple" onclick="startRipple('smooth-ripple','backward')">S.Ripple خلف</button>
+      <button class="btn btn-orange" onclick="gaOnce('glide',2)">انزلاق 2دورة</button>
+      <button class="btn btn-orange" onclick="gaOnce('creep',4)">زحف 4دورات</button>
     </div>
   </div>
 
   <div class="card">
     <h3>🦀 حركة جانبية</h3>
     <div class="grid2">
-      <button class="btn btn-blue" onclick="startGait('forward','forward','shift_left')">◄◄ يسار</button>
-      <button class="btn btn-blue" onclick="startGait('forward','forward','shift_right')">يمين ►►</button>
-      <button class="btn btn-orange" onclick="startGait('forward','forward','crab_walk')">سرطان</button>
+      <button class="btn btn-blue" onclick="startWalk('shift_left')">◄◄ يسار</button>
+      <button class="btn btn-blue" onclick="startWalk('shift_right')">يمين ►►</button>
+      <button class="btn btn-orange" onclick="startWalk('crab_walk')">سرطان</button>
       <button class="btn btn-gray" onclick="stopGait()">⏹ وقوف</button>
     </div>
   </div>
@@ -440,7 +440,7 @@ async function loadStatus(){
   const chip = document.getElementById('chipGait');
   if(gs.running){ chip.textContent='يمشي 🟢'; chip.className='status-chip chip-on'; }
   else if(estopOn){ chip.textContent='طوارئ ⛔'; chip.className='status-chip chip-off'; }
-  else { chip.textContent='توقّف'; chip.className='status-chip chip-gray'||'status-chip'; }
+  else { chip.textContent='توقّف'; chip.className='status-chip'; }
   const gd = document.getElementById('gaitStatus');
   if(estopOn) gd.innerHTML='<span class="stop">⛔ الطوارئ مفعّل — اضغط "إلغاء الطوارئ"</span>';
   else if(gs.running) gd.innerHTML=`<span class="on">▶ يمشي — ${gs.current_phase||''}</span>`;
@@ -534,13 +534,21 @@ async function stopGait(){
   jRelease();
 }
 
-async function gaOnce(type, cycles, gtype=''){
-  await apiFetch('/api/gait/once','POST',{type: gtype||type, speed:1.0, cycles});
+async function gaOnce(type, cycles){
+  await apiFetch('/api/gait/once','POST',{type, speed:1.0, cycles});
 }
 
-async function startGait(engine, dir, type=''){
+// مشي مستمر بنوع محدّد (forward/backward/shift_left/shift_right/crab_walk...)
+async function startWalk(type){
+  const r = await apiFetch('/api/gait/forward/start','POST',{type, speed:1.0});
+  if(!r.ok && r.error) console.warn('startWalk:', r.error);
+}
+
+// أنماط ripple / smooth-ripple
+async function startRipple(engine, dir){
   const ep = engine==='ripple' ? '/api/gait/ripple/start' : '/api/gait/smooth-ripple/start';
-  await apiFetch(ep,'POST',{direction: type||dir, speed:1.0});
+  const r = await apiFetch(ep,'POST',{direction: dir, speed:1.0});
+  if(!r.ok && r.error) console.warn('startRipple:', r.error);
 }
 
 async function bodyMv(mv){
@@ -549,19 +557,20 @@ async function bodyMv(mv){
 }
 
 // ── حركات استعراضية ──
+// ⚠️ يجب أن تطابق مفاتيح SPECIALS في spider/moves.py بالضبط (23 حركة)
 const SPECIALS = [
-  'wave','hi_five','dance','bow','shake','march','stretch',
-  'lean_fw','lean_bk','lean_l','lean_r','twerk','spin',
-  'intimidate','defensive','excited','sleepy','push_up',
-  'side_step','creep_fw','threat_display','salute','idle_sway'
+  'wave','dance','shake','salute','roar','spin','bow','stretch',
+  'idle_sway','wake_up','sleep_pose','flatten','push_up','tippy_toes',
+  'look_around','pounce','stomp','scared','dizzy','wiggle','peek',
+  'gallop','moonwalk'
 ];
 const LABELS = {
-  wave:'👋 تلويح', hi_five:'🖐️ هاي فايف', dance:'💃 رقص', bow:'🙇 انحناء',
-  shake:'🤝 مصافحة', march:'🚶 مسير', stretch:'🙆 تمدّد', lean_fw:'↩️ أمام',
-  lean_bk:'↪️ خلف', lean_l:'↰ يسار', lean_r:'↱ يمين', twerk:'🍑 تويرك',
-  spin:'🌀 دوران', intimidate:'😤 تهديد', defensive:'🛡️ دفاع', excited:'🎉 متحمّس',
-  sleepy:'😴 نعسان', push_up:'💪 ضغط', side_step:'↔️ جانبي', creep_fw:'🐾 تسلّل',
-  threat_display:'⚠️ إنذار', salute:'✋ تحيّة', idle_sway:'🌊 تأرجح'
+  wave:'👋 تلويح', dance:'💃 رقص', shake:'🤝 مصافحة', salute:'✋ تحيّة',
+  roar:'🦁 زئير', spin:'🌀 دوران', bow:'🙇 انحناء', stretch:'🙆 تمدّد',
+  idle_sway:'🌊 تأرجح', wake_up:'🌅 استيقاظ', sleep_pose:'😴 نوم', flatten:'🫓 انبطاح',
+  push_up:'💪 ضغط', tippy_toes:'🩰 أطراف', look_around:'👀 تلفّت', pounce:'🐆 انقضاض',
+  stomp:'🦵 دوس', scared:'😱 خوف', dizzy:'😵 دوار', wiggle:'〰️ تمايل',
+  peek:'🔍 اختلاس', gallop:'🐎 عدو', moonwalk:'🕺 مونووك'
 };
 const sgrid = document.getElementById('specialGrid');
 SPECIALS.forEach(m=>{
@@ -722,8 +731,9 @@ async function restoreCfg(){
   document.getElementById('cfgMsg').textContent=r.ok?'↩️ استُعيد':'❌ لا نسخة احتياطية';
 }
 async function setEasing(name){
-  const r=await apiFetch('/api/easing/set','POST',{easing:name});
-  document.getElementById('easingStatus').textContent=r.ok?'✅ '+name:'❌ '+r.error;
+  const r=await apiFetch('/api/easing/set','POST',{type:name});
+  document.getElementById('easingStatus').textContent=
+    r.easing?('✅ '+r.easing):('❌ '+(r.error||'خطأ'));
 }
 loadCfg();
 </script>

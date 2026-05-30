@@ -329,6 +329,7 @@ def api_health():
     """فحص سريع لحالة النظام"""
     return jsonify({
         "ok": True,
+        "hardware": HARDWARE,
         "imu": "connected" if BNO_READY else "disconnected",
         "gait_running": gait_event.is_set(),
         "force_stop": _force_stop,
@@ -1237,6 +1238,13 @@ def api_move():
     vy = float(d.get("vy", 0))
     om = float(d.get("omega", 0))
 
+    # حدّث أمر الحركة لمحاكاة GPS (آمن دائماً)
+    try:
+        from spider.sensors.gps import gps as _g
+        _g.set_motion(vx, vy, om)
+    except Exception:
+        pass
+
     # شرط الإيقاف
     if abs(vx) < 0.05 and abs(vy) < 0.05 and abs(om) < 0.05:
         if _gait_busy():
@@ -1251,12 +1259,20 @@ def api_move():
     mag = _math.hypot(vx, vy)
     speed = max(0.3, min(2.0, max(mag, abs(om))))
 
+    # نمط المشي الأمامي المختار من الواجهة (forward/glide/climb/prowl/high_step/creep)
+    style = d.get("gait", "forward")
+    forward_styles = {"forward", "glide", "climb", "prowl", "high_step", "creep"}
+
     if abs(om) > 0.3 and abs(om) >= mag:
-        gait_type = "rotate_cw" if om > 0 else "rotate_ccw"
+        # المحرّك يدعم turn_left/turn_right (وليس rotate_cw/ccw)
+        gait_type = "turn_right" if om > 0 else "turn_left"
     elif abs(vy) >= abs(vx):
-        gait_type = "shift_right" if vy > 0 else "shift_left"
+        # اصطلاح: vy>0 = يسار (يطابق الجوي ستيك: سحب لليسار → vy موجب)
+        gait_type = "shift_left" if vy > 0 else "shift_right"
+    elif vx > 0:
+        gait_type = style if style in forward_styles else "forward"
     else:
-        gait_type = "forward" if vx > 0 else "backward"
+        gait_type = "backward"
 
     # نفس الحركة شغّالة → استمر بلا إعادة تشغيل
     if _gait_busy() and _move_active_type[0] == gait_type:

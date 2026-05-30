@@ -17,6 +17,7 @@ class GPS:
         self._stop = threading.Event()
         self._ser = None
         self._sim = {"lat": sim_origin[0], "lon": sim_origin[1], "course": 0.0}
+        self._cmd = {"vx": 0.0, "vy": 0.0, "omega": 0.0}   # أمر الحركة الحالي (للمحاكاة)
 
         if not simulate:
             try:
@@ -31,6 +32,10 @@ class GPS:
     def stop(self):
         self._stop.set()
 
+    def set_motion(self, vx=0.0, vy=0.0, omega=0.0):
+        """يحدّث أمر الحركة الحالي — تستدعيها /api/move لتحريك الموقع المحاكى."""
+        self._cmd = {"vx": float(vx), "vy": float(vy), "omega": float(omega)}
+
     def _loop(self):
         while not self._stop.is_set():
             if self.simulate:
@@ -40,19 +45,14 @@ class GPS:
             time.sleep(1.0)
 
     def _sim_step(self):
-        """يحرّك موقع الروبوت المحاكى حسب أمر المشي الحالي."""
-        vx = vy = om = 0.0
-        try:
-            # نحاول نقرأ حالة المشي الحالية لو متاحة
-            import web_controller as wc
-            speed_scale = 0.001   # px/s → m/s تقريبي
-            if wc.gait_running:
-                vx = 0.3         # افتراض حركة للأمام إن المشي شغّال
-        except Exception:
-            pass
+        """يحرّك موقع الروبوت المحاكى حسب أمر الحركة الحالي (يُضبط عبر set_motion)."""
+        vx = self._cmd.get("vx", 0.0)
+        vy = self._cmd.get("vy", 0.0)
+        om = self._cmd.get("omega", 0.0)
 
-        speed = math.hypot(vx, vy)
-        self._sim["course"] = (self._sim["course"] + om * 10) % 360
+        # سرعة تقريبية بالمتر/ثانية (مقياس عرض فقط)
+        speed = math.hypot(vx, vy) * 0.5
+        self._sim["course"] = (self._sim["course"] + om * 15) % 360
         dist_m = speed * 1.0
         dlat = (dist_m * math.cos(math.radians(self._sim["course"]))) / 111111.0
         dlon = (dist_m * math.sin(math.radians(self._sim["course"]))) / \
