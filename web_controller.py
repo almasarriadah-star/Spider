@@ -1327,10 +1327,18 @@ from flask import Response
 from spider.sensors.camera import RGBCamera, ThermalCamera
 from spider.hardware import i2c_lock as _i2c_lock
 from spider.config import THERMAL_PORT as _THERMAL_PORT, THERMAL_BAUD as _THERMAL_BAUD
+from spider import config as _cfg_mod
 
 _rgb_cam = RGBCamera()
-# موديول MLX90640 بخرج UART على UART5 — رجوع تلقائي بلا عتاد (مثلاً على ويندوز).
-_thermal_cam = ThermalCamera(i2c_lock=_i2c_lock, port=_THERMAL_PORT, baud=_THERMAL_BAUD)
+# موديول MLX90640 بخرج UART على UART5 — إعدادات فك الإطار من config/sensors.json.
+# رجوع تلقائي بلا عتاد (مثلاً على ويندوز).
+_th_cfg = _cfg_mod.SENSORS["thermal"]
+_thermal_cam = ThermalCamera(
+    i2c_lock=_i2c_lock, port=_THERMAL_PORT, baud=_THERMAL_BAUD,
+    rows=_th_cfg.get("rows", 24), cols=_th_cfg.get("cols", 32),
+    header=_th_cfg.get("header", "5A5A"),
+    encoding=_th_cfg.get("encoding", "u16"),
+    scale=_th_cfg.get("scale", 100.0))
 
 
 @app.route("/video/rgb")

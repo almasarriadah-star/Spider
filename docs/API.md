@@ -92,6 +92,10 @@
 مع `?full=1` يُضاف `"matrix": [[...],[...]]` (24 صفّاً × 32 عمود، °C). للصورة الملوّنة
 استخدم `/api/v1/camera/thermal.jpg`.
 
+> **فك إطار موديول UART:** المفكّك مرن وقابل للضبط من `config/sensors.json → thermal`:
+> `header` (بايتات مزامنة hex)، `encoding` (`u16` | `u16be` | `f32`)، `scale` (للقسمة
+> على القيمة الصحيحة لإخراج °C مع u16). طابقها مع داتاشيت موديولك.
+
 ### `GET /api/v1/servos`
 ```json
 { "legs": { "R0": 90, "R1": 67, "...": 0 },
@@ -157,7 +161,8 @@ while True:
 {
   "lidar": { "port": "/dev/ttyAMA2", "baud": 230400, "kind": "ld06", "pwm_gpio": 18 },
   "gps":   { "port": "/dev/ttyAMA3", "baud": 9600 },
-  "thermal": { "port": "/dev/ttyAMA4", "baud": 115200 },
+  "thermal": { "port": "/dev/ttyAMA4", "baud": 115200,
+               "rows": 24, "cols": 32, "header": "5A5A", "encoding": "u16", "scale": 100.0 },
   "soil":  { "port": "/dev/ttyUSB0", "baud": 9600, "dry_raw": 26000, "wet_raw": 11000 },
   "gas":   { "gpio": 6, "active_low": true },
   "dht22": { "gpio": 16 }

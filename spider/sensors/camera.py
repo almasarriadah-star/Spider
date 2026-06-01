@@ -65,7 +65,7 @@ class ThermalCamera:
     """
 
     def __init__(self, i2c_lock=None, port=None, baud=115200, simulate=False,
-                 rows=24, cols=32):
+                 rows=24, cols=32, header="5A5A", encoding="u16", scale=100.0):
         self.lock = i2c_lock
         self.ready = False
         self.last_frame = None          # مصفوفة 24×32 درجات مئوية
@@ -75,6 +75,13 @@ class ThermalCamera:
         self._ser = None
         self.mlx = None
         self._stop = threading.Event()
+        # إعدادات فك إطار الموديول التسلسلي (تُضبط من config/sensors.json)
+        try:
+            self._header = bytes.fromhex((header or "").replace(" ", ""))
+        except Exception:
+            self._header = b""
+        self._encoding = encoding if encoding in ("u16", "u16be", "f32") else "u16"
+        self._scale = float(scale) if scale else 1.0
 
         if simulate:
             self.mode = "sim"
@@ -111,26 +118,63 @@ class ThermalCamera:
                 pass
 
     def _uart_loop(self):
-        """يقرأ إطارات الموديول التسلسلي ويملأ last_frame.
-        ⚠️ صيغة الإطار يحدّدها مصنّع الموديول — أكمل الفك أدناه حسب ورقته.
-        النمط العام: مزامنة رأس → قراءة rows*cols قيمة → تحويل لمصفوفة °C."""
+        """يفك إطارات موديول MLX90640 التسلسلي ويملأ last_frame (24×32 °C).
+
+        إطار = [رأس مزامنة] + rows*cols قيمة بكسل. قابل للضبط من config/sensors.json:
+          header   : بايتات مزامنة hex (مثل "5A5A"). فارغ = إطارات ثابتة الطول بلا رأس.
+          encoding : u16 (uint16 LE) | u16be (uint16 BE) | f32 (float32 LE).
+          scale    : للقسمة على القيمة الصحيحة لإخراج °C (يُتجاهَل مع f32).
+        ⚠️ طابق هذه الثلاثة مع داتاشيت موديولك؛ الافتراضات شائعة لكنها ليست قياساً موحّداً."""
+        import struct
         import numpy as np
         rows, cols = self.shape
         npix = rows * cols
+        hdr = self._header
+        vsize = 4 if self._encoding == "f32" else 2
+        fmt = {"u16": "<%dH", "u16be": ">%dH", "f32": "<%df"}[self._encoding] % npix
+        frame_bytes = npix * vsize
+        cap = 4 * (len(hdr) + frame_bytes + 8)
+        ser = self._ser
+        buf = b""
         try:
             while not self._stop.is_set():
-                # TODO: استبدل هذا بالفك الحقيقي حسب بروتوكول موديولك.
-                # مثال شائع: 0x5A 0x5A ثم npix قيمة uint16 (درجة×100) little-endian:
-                #   raw = self._ser.read(2 + npix*2)
-                #   vals = struct.unpack_from("<%dH" % npix, raw, 2)
-                #   m = np.array(vals, float).reshape(self.shape) / 100.0
-                #   self.last_frame = m
-                line = self._ser.readline()       # قراءة آمنة افتراضية حتى يُكمَّل الفك
-                if not line:
-                    continue
-                self.ready = True
+                chunk = ser.read(max(frame_bytes, 64))
+                if chunk:
+                    buf += chunk
+                if len(buf) > cap:                       # لا تترك المخزن ينتفخ
+                    buf = buf[-(len(hdr) + frame_bytes):]
+                while True:
+                    if hdr:
+                        i = buf.find(hdr)
+                        if i < 0:                        # لا رأس بعد — احتفظ بذيل لاحتمال انقسامه
+                            if len(hdr) > 1 and len(buf) >= len(hdr):
+                                buf = buf[-(len(hdr) - 1):]
+                            break
+                        if len(buf) - i - len(hdr) < frame_bytes:
+                            buf = buf[i:]                # انتظر بقية الحمولة
+                            break
+                        payload = buf[i + len(hdr): i + len(hdr) + frame_bytes]
+                        buf = buf[i + len(hdr) + frame_bytes:]
+                    else:                                # بلا رأس — إطارات ثابتة الطول
+                        if len(buf) < frame_bytes:
+                            break
+                        payload, buf = buf[:frame_bytes], buf[frame_bytes:]
+                    try:
+                        vals = struct.unpack(fmt, payload)
+                    except Exception:
+                        continue
+                    m = np.array(vals, dtype=float).reshape(self.shape)
+                    if self._encoding != "f32":
+                        m = m / self._scale
+                    self.last_frame = m
+                    self.ready = True
         except Exception:
             self.ready = False
+        finally:
+            try:
+                ser.close()
+            except Exception:
+                pass
 
     def _sim_loop(self):
         import numpy as np
