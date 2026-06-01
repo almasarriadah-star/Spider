@@ -170,13 +170,9 @@ DO = **5V** ويُتلف قطب الراسبيري (الحد 3.3V). الحل: م
 > على إصدارات Raspberry Pi OS القديمة المسار `/boot/config.txt`.
 
 ```ini
-# تفعيل الـ UART + تحرير الـ PL011 من البلوتوث للـ IMU
 enable_uart=1
-dtoverlay=disable-bt
-# ⚠️ disable-bt ضروري: يحرّر PL011 (GPIO14/15) → serial0=ttyAMA0 للـ IMU،
-#    وإلا يحتلّ البلوتوث serial0 فيفشل الـ IMU.
 
-# توليد منافذ UART إضافية (بلا كومنتات على نفس السطر — تربك الإقلاع)
+# توليد منافذ UART إضافية — ⚠️ بلا كومنتات على نفس السطر (تمنع عمل الـ overlay!)
 dtoverlay=uart3
 dtoverlay=uart4
 dtoverlay=uart5
@@ -185,11 +181,17 @@ dtoverlay=uart5
 dtparam=i2c_arm=on
 ```
 
-> 🔎 **أسماء الأجهزة الفعلية** (مؤكَّدة على Pi 4 / kernel 6.12): الكيرنل يسمّي كل منفذ
+> 🔑 **الدرس المستفاد من النشر الفعلي:** كان السبب الذي منع uart3/4/5 من العمل هو وضع
+> **كومنتات عربية + أسهم `→` على نفس سطر `dtoverlay=`**. ضع الكومنت على سطر منفصل دائماً.
+>
+> 🔎 **أسماء الأجهزة الفعلية** (Pi 4 / kernel 6.12): الكيرنل يسمّي كل منفذ
 > `ttyAMA<رقم الـ uart>`: `uart3 → /dev/ttyAMA3` (LD06) · `uart4 → /dev/ttyAMA4` (GPS) ·
-> `uart5 → /dev/ttyAMA5` (كاميرا) · `serial0 → /dev/ttyAMA0` (IMU بعد disable-bt).
-> **تأكّد دائماً بـ `ls -l /dev/ttyAMA*` بعد الإقلاع** وطابق `config/sensors.json`.
-> ⚠️ لا تضع كومنتات (خصوصاً عربية أو `→`) على نفس سطر `dtoverlay=` — قد تمنع عمل الـ overlay.
+> `uart5 → /dev/ttyAMA5` (كاميرا). **تأكّد بـ `ls -l /dev/ttyAMA*` بعد الإقلاع** وطابق
+> `config/sensors.json`.
+>
+> 🧭 **الـ IMU على GPIO14/15:** يستخدم `serial0` (= mini‑UART `/dev/ttyS0` افتراضياً، وهو
+> الإعداد الأصلي الشغّال). `dtoverlay=disable-bt` **اختياري** (يحوّل serial0 إلى PL011
+> `ttyAMA0`) ولا يلزم لعمل uart3/4/5. أبقِ `imu.port = /dev/serial0` فيتبع أيّهما فُعّل.
 
 ### خطوات ما بعد التعديل
 1. **حرّر منفذ UART0 من الكونسول** حتى يبقى للـ IMU:
