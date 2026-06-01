@@ -33,9 +33,9 @@ class RGBCamera:
     def read(self):
         """يُرجع frame كـ ndarray BGR، أو None إن لم تكن الكاميرا متاحة."""
         if self.backend == "picamera2":
-            rgb = self.cam.capture_array()
-            import cv2
-            return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            # picamera2 بصيغة "RGB888" يعطي مصفوفة بترتيب BGR فعلياً — وهو ما يتوقّعه
+            # cv2.imencode مباشرةً. التحويل الإضافي (RGB2BGR) كان يبدّل R↔B (صبغة زرقاء).
+            return self.cam.capture_array()
         elif self.backend == "opencv":
             ok, frame = self.cap.read()
             return frame if ok else None
