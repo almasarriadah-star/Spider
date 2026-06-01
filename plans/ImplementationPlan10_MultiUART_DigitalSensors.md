@@ -29,8 +29,9 @@
 | ليدار TFmini | `/dev/ttyAMA2` (UART3) | GPIO5 / p29 |
 | GPS | `/dev/ttyAMA3` (UART4) | GPIO9 / p21 |
 | كاميرا حرارية | `/dev/ttyAMA4` (UART5) | GPIO13 / p33 |
+| رطوبة التربة | `/dev/ttyUSB0` (USB‑Serial) | منفذ USB |
 | غاز (DO) | GPIO6 / p31 | — |
-| رطوبة (DO) | GPIO16 / p36 | — |
+| DHT22 (حرارة+رطوبة الجو) | GPIO16 / p36 (1‑Wire) | — |
 
 ---
 
@@ -46,12 +47,13 @@ LIDAR_PORT    = "/dev/ttyAMA2"   # UART3
 GPS_PORT      = "/dev/ttyAMA3"   # UART4
 THERMAL_PORT  = "/dev/ttyAMA4"   # UART5
 THERMAL_BAUD  = 115200           # ⚠️ عدّل حسب موديل الكاميرا
+SOIL_PORT     = "/dev/ttyUSB0"   # رطوبة التربة عبر محوّل USB‑Serial
+SOIL_BAUD     = 9600             # ⚠️ عدّل حسب الموديول
 
-GAS_DO_GPIO       = 6            # BCM — خرج رقمي للغاز
-HUMIDITY_DO_GPIO  = 16           # BCM — خرج رقمي للرطوبة
-# منطق الخرج: True لو الحساس يعطي LOW عند الإنذار (فعّال-منخفض، شائع في MQ)
-GAS_ACTIVE_LOW      = True
-HUMIDITY_ACTIVE_LOW = True
+GAS_DO_GPIO    = 6               # BCM — خرج رقمي للغاز
+GAS_ACTIVE_LOW = True            # True لو يعطي LOW عند الإنذار (فعّال-منخفض، شائع في MQ)
+
+DHT22_GPIO     = 16              # BCM — خط بيانات DHT22 (حرارة + رطوبة الجو، سلك-واحد)
 ```
 
 ### 3.2 الليدار — `spider/sensors/lidar.py`
@@ -159,21 +161,21 @@ class ThermalCamera:
 thermal = ThermalCamera(simulate=False)
 ```
 
-### 3.6 وحدة جديدة — حساسات رقمية `spider/sensors/digital.py`
-قراءة DO عبر `RPi.GPIO` مع محاكاة على ويندوز.
+### 3.6 وحدة جديدة — حساس غاز رقمي + DHT22 `spider/sensors/digital.py`
+الغاز خرج DO بسيط عبر `RPi.GPIO`؛ الـ DHT22 بروتوكول سلك-واحد عبر `adafruit_dht`.
+الإثنان مع محاكاة على ويندوز.
 
 ```python
 # spider/sensors/digital.py
-"""حساسات رقمية DO (غاز/رطوبة) عبر GPIO + محاكاة."""
+"""حساس غاز رقمي (DO) + DHT22 (حرارة/رطوبة) — مع محاكاة."""
 import random
-from spider.config import (GAS_DO_GPIO, HUMIDITY_DO_GPIO,
-                           GAS_ACTIVE_LOW, HUMIDITY_ACTIVE_LOW)
+from spider.config import GAS_DO_GPIO, GAS_ACTIVE_LOW, DHT22_GPIO
 
-class DigitalSensor:
-    def __init__(self, gpio, active_low=True, simulate=False):
-        self.gpio = gpio
-        self.active_low = active_low
-        self.simulate = simulate
+
+class GasSensor:
+    """خرج DO رقمي (HIGH/LOW حسب عتبة الموديول)."""
+    def __init__(self, gpio=GAS_DO_GPIO, active_low=GAS_ACTIVE_LOW, simulate=False):
+        self.gpio, self.active_low, self.simulate = gpio, active_low, simulate
         self._gpio = None
         if not simulate:
             try:
@@ -185,19 +187,106 @@ class DigitalSensor:
                 self.simulate = True
 
     def alarm(self):
-        """True عند تجاوز العتبة (إنذار)."""
+        """True عند تجاوز عتبة الغاز."""
         if self.simulate:
             return random.random() < 0.1
-        raw = self._gpio.input(self.gpio)   # 0/1
+        raw = self._gpio.input(self.gpio)
         return (raw == 0) if self.active_low else (raw == 1)
 
-gas      = DigitalSensor(GAS_DO_GPIO, GAS_ACTIVE_LOW, simulate=False)
-humidity = DigitalSensor(HUMIDITY_DO_GPIO, HUMIDITY_ACTIVE_LOW, simulate=False)
+
+class DHT22Sensor:
+    """حرارة (°C) + رطوبة الجو (%) — بروتوكول سلك-واحد."""
+    def __init__(self, gpio=DHT22_GPIO, simulate=False):
+        self.gpio, self.simulate = gpio, simulate
+        self._dev = None
+        self._last = {"temp": None, "humidity": None}
+        if not simulate:
+            try:
+                import board, adafruit_dht
+                self._dev = adafruit_dht.DHT22(getattr(board, f"D{gpio}"))
+            except Exception:
+                self.simulate = True
+
+    def read(self):
+        if self.simulate:
+            self._last = {"temp": round(22 + random.uniform(-2, 5), 1),
+                          "humidity": round(45 + random.uniform(-10, 20), 1)}
+            return dict(self._last)
+        try:
+            t, h = self._dev.temperature, self._dev.humidity
+            if t is not None and h is not None:
+                self._last = {"temp": round(t, 1), "humidity": round(h, 1)}
+        except Exception:
+            pass            # DHT22 يفشل أحياناً بقراءة — نُبقي آخر قيمة صالحة
+        return dict(self._last)
+
+
+gas   = GasSensor(simulate=False)
+dht22 = DHT22Sensor(simulate=False)
 ```
 
-> ⚠️ تذكير: حساس الغاز MQ بخرج 5V يحتاج **مقسّم جهد** على DO قبل GPIO6 (الحد 3.3V).
+> ⚠️ تذكير: غاز MQ بخرج 5V يحتاج **مقسّم جهد** على DO قبل GPIO6. DHT22 على 3V3 +
+> مقاومة سحب 10kΩ. ثبّت `pip install adafruit-circuitpython-dht`.
 
-### 3.7 مسارات الـ API — `web_controller.py`
+### 3.7 وحدة معدّلة — رطوبة التربة عبر USB `spider/sensors/soil.py`
+ينتقل من ADS1115 (I2C) إلى محوّل USB‑Serial (`/dev/ttyUSB0`). نعيد كتابة الوحدة
+لتقرأ سطراً تسلسلياً (مثلاً رقم خام أو نسبة) مع رجوع تلقائي للمحاكاة.
+
+```python
+# spider/sensors/soil.py — النسخة الجديدة (USB‑Serial)
+import threading, time, random
+from spider.config import SOIL_PORT, SOIL_BAUD
+
+class SoilSensor:
+    def __init__(self, port=SOIL_PORT, baud=SOIL_BAUD, simulate=False,
+                 dry_raw=26000, wet_raw=11000):
+        self.port, self.baud = port, baud
+        self.dry, self.wet = dry_raw, wet_raw
+        self.simulate = simulate
+        self.ready = False
+        self._raw = self.dry
+        self._ser = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        if not simulate:
+            try:
+                import serial
+                self._ser = serial.Serial(port, baud, timeout=1)
+                self.ready = True
+            except Exception:
+                self.simulate = True
+
+    def start(self):
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        while not self._stop.is_set():
+            if self.simulate:
+                with self._lock:
+                    self._raw = random.randint(self.wet, self.dry)
+                time.sleep(1.0)
+            else:
+                try:
+                    line = self._ser.readline().decode("ascii", "ignore").strip()
+                    # ⚠️ TODO: عدّل حسب صيغة موديولك (رقم خام أو نسبة مباشرة)
+                    if line:
+                        with self._lock:
+                            self._raw = int(float(line))
+                        self.ready = True
+                except Exception:
+                    pass
+
+    def read_percent(self):
+        with self._lock:
+            raw = self._raw
+        pct = (self.dry - raw) / max(1, (self.dry - self.wet)) * 100.0
+        return max(0.0, min(100.0, round(pct, 1)))
+
+soil = SoilSensor(simulate=False)
+```
+> ينقص استدعاء `soil.start()` في `web_controller.py` (لم يكن مطلوباً في نسخة I2C).
+
+### 3.8 مسارات الـ API — `web_controller.py`
 ```python
 # كاميرا حرارية
 from spider.sensors.thermal import thermal as _thermal
@@ -207,22 +296,23 @@ _thermal.start()
 def thermal_read():
     return jsonify(_thermal.get())
 
-# حساسات رقمية
-from spider.sensors.digital import gas as _gas, humidity as _humidity
+# غاز + DHT22
+from spider.sensors.digital import gas as _gas, dht22 as _dht22
 
-@app.route("/api/digital")
-def digital_read():
+@app.route("/api/environment")
+def environment_read():
+    air = _dht22.read()
     return jsonify({
-        "gas_alarm": _gas.alarm(),
-        "humidity_alarm": _humidity.alarm(),
-        "gas_sim": _gas.simulate,
-        "humidity_sim": _humidity.simulate,
+        "gas_alarm": _gas.alarm(), "gas_sim": _gas.simulate,
+        "air_temp": air["temp"], "air_humidity": air["humidity"],
+        "dht_sim": _dht22.simulate,
     })
 ```
+> رطوبة التربة تبقى على مسارها الحالي `/api/soil` لكن المصدر صار USB (يلزم `_soil.start()`).
 
-### 3.8 الواجهة — `templates/dashboard.html`
+### 3.9 الواجهة — `templates/dashboard.html`
 - بطاقة كاميرا حرارية: شبكة 8×8 ملوّنة (heatmap) + min/max/avg، تستهلك `/api/thermal`.
-- مؤشّرات إنذار غاز/رطوبة (لمبة حمراء/خضراء) من `/api/digital` كل ~1s.
+- بطاقة بيئة: حرارة الجو + رطوبة الجو (DHT22) + لمبة إنذار غاز من `/api/environment` كل ~1s.
 
 ---
 
@@ -231,15 +321,16 @@ def digital_read():
 راجع قسم «تفعيل UART الإضافية» في `docs/HARDWARE_WIRING.md`:
 1. أضف `dtoverlay=uart3/uart4/uart5` و `enable_uart=1` في `config.txt`.
 2. حرّر منفذ الكونسول (raspi-config) وأعد التشغيل.
-3. `ls -l /dev/ttyAMA*` للتأكّد، وعدّل الثوابت في `config.py` لو اختلفت الأسماء (أو فعّل udev).
-4. `pip install pyserial RPi.GPIO`.
+3. `ls -l /dev/ttyAMA*` و `ls -l /dev/ttyUSB*` للتأكّد، وعدّل الثوابت في `config.py` لو اختلفت الأسماء (أو فعّل udev).
+4. `pip install pyserial RPi.GPIO adafruit-circuitpython-dht`.
 
 ---
 
 ## 5) معايير القبول
 - ✅ كل جهاز UART على منفذه دون تصادم (IMU/Lidar/GPS/Thermal).
 - ✅ قراءة الكاميرا الحرارية (إطار + min/max) وعرضها.
-- ✅ إنذار غاز/رطوبة رقمي يظهر في الواجهة.
+- ✅ إنذار غاز رقمي + قراءة DHT22 (حرارة/رطوبة الجو) تظهر في الواجهة.
+- ✅ رطوبة التربة تُقرأ من `/dev/ttyUSB0` (USB) لا من I2C.
 - ✅ كل شيء يعمل بالمحاكاة على ويندوز (رجوع تلقائي).
 - ✅ لا تعارض مع ناقل I2C للسيرفوات.
 
