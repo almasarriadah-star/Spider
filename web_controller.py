@@ -1436,13 +1436,24 @@ _lidar.start()
 
 @app.route("/api/lidar/scan")
 def lidar_scan():
-    return jsonify({"ready": _lidar.ready, "scan": _lidar.get_scan()})
+    return jsonify({
+        "ready": _lidar.ready,
+        "scan": _lidar.get_scan(),
+        "distance_mm": _lidar.distance_mm,
+        "strength": _lidar.strength,
+        "simulate": _lidar.simulate,
+    })
 
 
 @app.route("/api/lidar/status")
 def lidar_status():
     sc = _lidar.get_scan()
-    return jsonify({"ready": _lidar.ready, "points": len(sc)})
+    return jsonify({
+        "ready": _lidar.ready,
+        "points": len(sc),
+        "distance_mm": _lidar.distance_mm,
+        "simulate": _lidar.simulate,
+    })
 
 
 @app.route("/api/lidar/project", methods=["POST"])

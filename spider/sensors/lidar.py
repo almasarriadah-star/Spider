@@ -1,5 +1,19 @@
 # spider/sensors/lidar.py
-"""قارئ Lidar دوّار (RPLIDAR) مع محاكاة غرفة مستطيلة + عائق متحرّك."""
+"""قارئ ليدار:
+- kind="tfmini": ليدار نقطة واحدة عبر UART (TFmini / TF-Luna / Benewake)
+  يقرأ المسافة الأمامية من منفذ السيريال على الراسبيري (GPIO14/15, /dev/serial0).
+- kind="rplidar": ليدار دوّار 360° عبر USB (RPLIDAR A1/A2).
+- simulate: محاكاة غرفة مستطيلة + عائق متحرّك (بلا عتاد).
+
+⚠️ توصيل TFmini/TF-Luna على الراسبيري:
+   الليدار VCC(+)   → 5V الراسبيري (TF-Luna يقبل 3.3~5V، TFmini يحتاج 5V)
+   الليدار GND(-)   → GND الراسبيري
+   الليدار TX       → الراسبيري RX = GPIO15 = الطرف رقم 10
+   الليدار RX       → الراسبيري TX = GPIO14 = الطرف رقم 8 (اختياري، لإرسال أوامر)
+   لقراءة بيانات الليدار يجب أن يدخل خط TX للليدار على RX للراسبيري (GPIO15/طرف 10).
+   فعّل الـ UART:  sudo raspi-config → Interface → Serial → (Login shell: No, Hardware: Yes)
+   ثم استخدم المنفذ /dev/serial0 بسرعة 115200.
+"""
 import threading
 import time
 import math
@@ -7,22 +21,47 @@ import random
 
 
 class Lidar:
-    def __init__(self, port="/dev/ttyUSB0", simulate=True):
+    def __init__(self, port="/dev/serial0", baud=115200, kind="tfmini",
+                 simulate=False, forward_cone=20):
+        self.kind = kind
+        self.port = port
+        self.baud = baud
         self.simulate = simulate
-        self.scan = {}          # {angle_deg: distance_mm}
+        self.forward_cone = forward_cone   # عرض المخروط الأمامي بالدرجات للعرض على الرادار
+        self.scan = {}                     # {angle_deg(int): distance_mm}
+        self.distance_mm = 0               # المسافة الأمامية (TFmini) بالمليمتر
+        self.strength = 0                  # قوّة الإشارة (TFmini)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self.ready = False
         self._dev = None
+        self._ser = None
 
         if not simulate:
-            try:
-                from rplidar import RPLidar
-                self._dev = RPLidar(port)
-                self.ready = True
-            except Exception:
-                self.simulate = True
+            ok = self._open_tfmini() if kind == "tfmini" else self._open_rplidar()
+            if not ok:
+                self.simulate = True   # رجوع تلقائي للمحاكاة عند غياب العتاد (مثلاً على ويندوز)
 
+    # ── فتح الأجهزة ──
+    def _open_tfmini(self):
+        try:
+            import serial
+            self._ser = serial.Serial(self.port, self.baud, timeout=0.2)
+            self.ready = True
+            return True
+        except Exception:
+            return False
+
+    def _open_rplidar(self):
+        try:
+            from rplidar import RPLidar
+            self._dev = RPLidar(self.port)
+            self.ready = True
+            return True
+        except Exception:
+            return False
+
+    # ── دورة الحياة ──
     def start(self):
         threading.Thread(target=self._loop, name="LidarThread", daemon=True).start()
 
@@ -34,14 +73,70 @@ class Lidar:
                 self._dev.disconnect()
             except Exception:
                 pass
+        if self._ser:
+            try:
+                self._ser.close()
+            except Exception:
+                pass
 
     def _loop(self):
         if self.simulate:
             self._sim_loop()
+        elif self.kind == "tfmini":
+            self._real_loop_tfmini()
         else:
-            self._real_loop()
+            self._real_loop_rplidar()
 
-    def _real_loop(self):
+    # ── قراءة TFmini/TF-Luna عبر UART ──
+    def _update_point(self, dist_mm, strength=0):
+        """يخزّن نقطة أمامية واحدة موزّعة على مخروط صغير لتظهر على الرادار."""
+        self.distance_mm = dist_mm
+        self.strength = strength
+        new = {}
+        if dist_mm > 0:
+            half = max(0, self.forward_cone // 2)
+            for a in range(-half, half + 1):
+                new[a % 360] = dist_mm     # 0° = للأمام
+        with self._lock:
+            self.scan = new
+
+    def _real_loop_tfmini(self):
+        """يفك إطار TFmini المكوّن من 9 بايت: 0x59 0x59 DistL DistH StrL StrH ResL ResH Checksum.
+        المسافة بالسنتيمتر = DistL + (DistH<<8)."""
+        ser = self._ser
+        buf = b""
+        try:
+            while not self._stop.is_set():
+                chunk = ser.read(9)
+                if chunk:
+                    buf += chunk
+                while len(buf) >= 9:
+                    if buf[0] == 0x59 and buf[1] == 0x59:
+                        frame = buf[:9]
+                        if (sum(frame[:8]) & 0xFF) == frame[8]:
+                            dist_cm = frame[2] | (frame[3] << 8)
+                            strength = frame[4] | (frame[5] << 8)
+                            # قراءة غير صالحة: قوّة منخفضة جداً أو مسافة صفر
+                            if dist_cm > 0 and strength > 0:
+                                self._update_point(dist_cm * 10, strength)
+                            else:
+                                self._update_point(0, strength)
+                            self.ready = True
+                            buf = buf[9:]
+                        else:
+                            buf = buf[1:]   # checksum خاطئ — أعد المزامنة بايت واحد
+                    else:
+                        buf = buf[1:]       # ابحث عن رأس الإطار
+        except Exception:
+            self.ready = False
+        finally:
+            try:
+                ser.close()
+            except Exception:
+                pass
+
+    # ── قراءة RPLIDAR دوّار عبر USB ──
+    def _real_loop_rplidar(self):
         try:
             for scan in self._dev.iter_scans(max_buf_meas=500):
                 if self._stop.is_set():
@@ -56,6 +151,7 @@ class Lidar:
         except Exception:
             self.ready = False
 
+    # ── المحاكاة ──
     def _sim_loop(self):
         """محاكاة غرفة مستطيلة + عائق متحرّك."""
         self.ready = True
@@ -81,6 +177,7 @@ class Lidar:
                 new[a] = d + random.uniform(-20, 20)
             with self._lock:
                 self.scan = new
+            self.distance_mm = new.get(0, 0)
             t += 1
             time.sleep(0.1)
 
@@ -105,5 +202,6 @@ def obstacles_world(scan, lat, lon, heading_deg, max_mm=2000, step=10):
     return pts
 
 
-# نسخة وحيدة عامة — simulate=True حتى توصيل الجهاز
-lidar = Lidar(simulate=True)
+# نسخة وحيدة عامة — TFmini عبر UART على /dev/serial0.
+# تحاول قراءة العتاد فعلياً، وترجع للمحاكاة تلقائياً إن لم يتوفّر المنفذ (مثلاً على ويندوز).
+lidar = Lidar(port="/dev/serial0", baud=115200, kind="tfmini", simulate=False)

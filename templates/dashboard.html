@@ -286,7 +286,7 @@ select{background:#131318;color:#e0e0e0;border:1px solid #333;border-radius:8px;
 
   <!-- ليدار -->
   <div class="card">
-    <h3>📡 الليدار (360°) <span id="lidarStatusTxt" style="font-size:10px;color:#666"></span></h3>
+    <h3>📡 الليدار (مسافة أمامية) <span id="lidarStatusTxt" style="font-size:10px;color:#666"></span></h3>
     <canvas id="radarCanvas" width="280" height="280"></canvas>
     <div style="text-align:center;margin-top:8px">
       <button class="btn btn-blue" onclick="lidarProject()">📍 أسقِط على الخريطة</button>
@@ -600,8 +600,10 @@ const RC=140, MAXD=3000;
 async function drawRadar(){
   try{
     const d = await apiFetch('/api/lidar/scan');
+    const distTxt = d.distance_mm ? `${(d.distance_mm/10).toFixed(0)} سم` : '—';
     document.getElementById('lidarStatusTxt').textContent =
-      d.ready ? `🟢 ${Object.keys(d.scan).length} نقطة` : '🔴 غير متصل (محاكاة)';
+      d.simulate ? `🟡 محاكاة (${distTxt})`
+                 : (d.ready ? `🟢 ${distTxt}` : '🔴 غير متصل');
     rx.clearRect(0,0,280,280);
     rx.strokeStyle='#1a2a2a'; rx.lineWidth=1;
     for(const r of [35,70,105,140]){ rx.beginPath(); rx.arc(RC,RC,r,0,7); rx.stroke(); }
