@@ -14,9 +14,9 @@
 | سيرفوات شمال (PCA9685 #2 @0x44) — أرجل ch0‑8 | I2C | — | SDA=GPIO2(p3) · SCL=GPIO3(p5) | — |
 | قاطع تغذية السيرفوات (MOSFET) | GPIO | — | GPIO17 (p11) | — |
 | **IMU — BNO085** | UART0 | `/dev/serial0` | IMU‑TX → **GPIO15 RX (p10)** | 115200 |
-| **ليدار — LD06 (دوّار 360°)** | UART3 | `/dev/ttyAMA2` | LD06‑TX → **GPIO5 RX (p29)** · PWM → **GPIO18 (p12)** | 230400 |
-| **GPS** | UART4 | `/dev/ttyAMA3` | GPS‑TX → **GPIO9 RX (p21)** | 9600 |
-| **كاميرا حرارية MLX90640 (موديول UART)** | UART5 | `/dev/ttyAMA4` | Cam‑TX → **GPIO13 RX (p33)** · Cam‑RX → **GPIO12 TX (p32)** | (حسب الموديول) |
+| **ليدار — LD06 (دوّار 360°)** | UART3 | `/dev/ttyAMA3` | LD06‑TX → **GPIO5 RX (p29)** · PWM → **GPIO18 (p12)** | 230400 |
+| **GPS** | UART4 | `/dev/ttyAMA4` | GPS‑TX → **GPIO9 RX (p21)** | 9600 |
+| **كاميرا حرارية MLX90640 (موديول UART)** | UART5 | `/dev/ttyAMA5` | Cam‑TX → **GPIO13 RX (p33)** · Cam‑RX → **GPIO12 TX (p32)** | (حسب الموديول) |
 | **رطوبة التربة** | USB‑Serial | `/dev/ttyUSB0` | منفذ USB (محوّل USB‑UART) | — |
 | **حساس الغاز MQ135 (DO رقمي)** | GPIO | — | DO → **GPIO6 (p31)** | — |
 | **DHT22 (حرارة + رطوبة الجو)** | 1‑Wire رقمي | — | DATA → **GPIO16 (p36)** | — |
@@ -170,17 +170,26 @@ DO = **5V** ويُتلف قطب الراسبيري (الحد 3.3V). الحل: م
 > على إصدارات Raspberry Pi OS القديمة المسار `/boot/config.txt`.
 
 ```ini
-# تفعيل الـ UART الأساسي (UART0 لـ IMU)
+# تفعيل الـ UART + تحرير الـ PL011 من البلوتوث للـ IMU
 enable_uart=1
+dtoverlay=disable-bt
+# ⚠️ disable-bt ضروري: يحرّر PL011 (GPIO14/15) → serial0=ttyAMA0 للـ IMU،
+#    وإلا يحتلّ البلوتوث serial0 فيفشل الـ IMU.
 
-# توليد منافذ UART إضافية على الأقطاب
-dtoverlay=uart3      # ليدار LD06   → /dev/ttyAMA2  (GPIO4 TX p7 / GPIO5 RX p29)
-dtoverlay=uart4      # GPS          → /dev/ttyAMA3  (GPIO8 TX p24 / GPIO9 RX p21)
-dtoverlay=uart5      # كاميرا حرارية → /dev/ttyAMA4  (GPIO12 TX p32 / GPIO13 RX p33)
+# توليد منافذ UART إضافية (بلا كومنتات على نفس السطر — تربك الإقلاع)
+dtoverlay=uart3
+dtoverlay=uart4
+dtoverlay=uart5
 
 # I2C للسيرفوات (PCA9685 ×2)
 dtparam=i2c_arm=on
 ```
+
+> 🔎 **أسماء الأجهزة الفعلية** (مؤكَّدة على Pi 4 / kernel 6.12): الكيرنل يسمّي كل منفذ
+> `ttyAMA<رقم الـ uart>`: `uart3 → /dev/ttyAMA3` (LD06) · `uart4 → /dev/ttyAMA4` (GPS) ·
+> `uart5 → /dev/ttyAMA5` (كاميرا) · `serial0 → /dev/ttyAMA0` (IMU بعد disable-bt).
+> **تأكّد دائماً بـ `ls -l /dev/ttyAMA*` بعد الإقلاع** وطابق `config/sensors.json`.
+> ⚠️ لا تضع كومنتات (خصوصاً عربية أو `→`) على نفس سطر `dtoverlay=` — قد تمنع عمل الـ overlay.
 
 ### خطوات ما بعد التعديل
 1. **حرّر منفذ UART0 من الكونسول** حتى يبقى للـ IMU:
@@ -194,7 +203,7 @@ dtparam=i2c_arm=on
 2. **أعد التشغيل** ثم تحقّق من ظهور المنافذ:
    ```bash
    ls -l /dev/ttyAMA*
-   # المتوقّع: ttyAMA0 (IMU) · ttyAMA2 (LD06) · ttyAMA3 (GPS) · ttyAMA4 (كاميرا)
+   # المتوقّع: ttyAMA0 (IMU) · ttyAMA3 (LD06) · ttyAMA4 (GPS) · ttyAMA5 (كاميرا)
    i2cdetect -y 1   # يجب أن تظهر 0x40 · 0x44 (PCA9685)
    dmesg | grep -i tty
    ```
@@ -230,10 +239,10 @@ dtparam=i2c_arm=on
 | ثابت في الكود | القيمة |
 |---------------|--------|
 | `IMU_PORT` | `/dev/serial0` |
-| `LIDAR_PORT` / `LIDAR_BAUD` / `kind` | `/dev/ttyAMA2` / `230400` / `"ld06"` |
+| `LIDAR_PORT` / `LIDAR_BAUD` / `kind` | `/dev/ttyAMA3` / `230400` / `"ld06"` |
 | `LIDAR_PWM_GPIO` | `18` (BCM, p12) |
-| `GPS_PORT` | `/dev/ttyAMA3` |
-| `THERMAL_PORT` / `THERMAL_BAUD` | `/dev/ttyAMA4` / حسب الموديول |
+| `GPS_PORT` | `/dev/ttyAMA4` |
+| `THERMAL_PORT` / `THERMAL_BAUD` | `/dev/ttyAMA5` / حسب الموديول |
 | `SOIL_PORT` | `/dev/ttyUSB0` |
 | `GAS_DO_GPIO` | `6` (BCM) |
 | `DHT22_GPIO` | `16` (BCM) |
