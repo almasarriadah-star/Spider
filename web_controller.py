@@ -1336,9 +1336,10 @@ _th_cfg = _cfg_mod.SENSORS["thermal"]
 _thermal_cam = ThermalCamera(
     i2c_lock=_i2c_lock, port=_THERMAL_PORT, baud=_THERMAL_BAUD,
     rows=_th_cfg.get("rows", 24), cols=_th_cfg.get("cols", 32),
-    header=_th_cfg.get("header", "5A5A"),
-    encoding=_th_cfg.get("encoding", "u16"),
-    scale=_th_cfg.get("scale", 100.0))
+    header=_th_cfg.get("header", "5A5A0206"),
+    encoding=_th_cfg.get("encoding", "i16"),
+    scale=_th_cfg.get("scale", 100.0),
+    init=_th_cfg.get("init"))
 
 
 @app.route("/video/rgb")

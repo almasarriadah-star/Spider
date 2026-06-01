@@ -65,7 +65,8 @@ class ThermalCamera:
     """
 
     def __init__(self, i2c_lock=None, port=None, baud=115200, simulate=False,
-                 rows=24, cols=32, header="5A5A", encoding="u16", scale=100.0):
+                 rows=24, cols=32, header="5A5A0206", encoding="i16", scale=100.0,
+                 init=None):
         self.lock = i2c_lock
         self.ready = False
         self.last_frame = None          # مصفوفة 24×32 درجات مئوية
@@ -80,8 +81,16 @@ class ThermalCamera:
             self._header = bytes.fromhex((header or "").replace(" ", ""))
         except Exception:
             self._header = b""
-        self._encoding = encoding if encoding in ("u16", "u16be", "f32") else "u16"
+        self._encoding = encoding if encoding in (
+            "u16", "u16be", "i16", "i16be", "f32") else "i16"
         self._scale = float(scale) if scale else 1.0
+        # أوامر hex تُرسَل للموديول لبدء البث (مثل GY-MCU90640)
+        self._init_cmds = []
+        for c in (init or []):
+            try:
+                self._init_cmds.append(bytes.fromhex(c.replace(" ", "")))
+            except Exception:
+                pass
 
         if simulate:
             self.mode = "sim"
@@ -126,17 +135,26 @@ class ThermalCamera:
           scale    : للقسمة على القيمة الصحيحة لإخراج °C (يُتجاهَل مع f32).
         ⚠️ طابق هذه الثلاثة مع داتاشيت موديولك؛ الافتراضات شائعة لكنها ليست قياساً موحّداً."""
         import struct
+        import time as _t
         import numpy as np
         rows, cols = self.shape
         npix = rows * cols
         hdr = self._header
         vsize = 4 if self._encoding == "f32" else 2
-        fmt = {"u16": "<%dH", "u16be": ">%dH", "f32": "<%df"}[self._encoding] % npix
+        fmt = {"u16": "<%dH", "u16be": ">%dH", "i16": "<%dh",
+               "i16be": ">%dh", "f32": "<%df"}[self._encoding] % npix
         frame_bytes = npix * vsize
         cap = 4 * (len(hdr) + frame_bytes + 8)
         ser = self._ser
         buf = b""
         try:
+            # أوامر بدء البث للموديول (GY-MCU90640 لا يبثّ حتى يستقبلها)
+            for cmd in self._init_cmds:
+                try:
+                    ser.write(cmd)
+                    _t.sleep(0.1)
+                except Exception:
+                    pass
             while not self._stop.is_set():
                 chunk = ser.read(max(frame_bytes, 64))
                 if chunk:

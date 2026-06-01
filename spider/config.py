@@ -54,9 +54,12 @@ SENSORS_DEFAULT = {
     "imu":     {"port": "/dev/serial0", "baud": 115200},
     "lidar":   {"port": "/dev/ttyAMA2", "baud": 230400, "kind": "ld06", "pwm_gpio": 18},
     "gps":     {"port": "/dev/ttyAMA3", "baud": 9600},
+    # موديول GY-MCU90640 (HY-18): إطار 1544 بايت، رأس 5A5A0206، 768×int16 (°C×100).
+    # init: أوامر تُرسَل للموديول لبدء البث (4Hz ثم تشغيل تلقائي).
     "thermal": {"port": "/dev/ttyAMA4", "baud": 115200,
                 "rows": 24, "cols": 32,
-                "header": "5A5A", "encoding": "u16", "scale": 100.0},
+                "header": "5A5A0206", "encoding": "i16", "scale": 100.0,
+                "init": ["A52501CB", "A53502DC"]},
     "soil":    {"port": "/dev/ttyUSB0", "baud": 9600, "dry_raw": 26000, "wet_raw": 11000},
     "gas":     {"gpio": 6, "active_low": True},
     "dht22":   {"gpio": 16},
