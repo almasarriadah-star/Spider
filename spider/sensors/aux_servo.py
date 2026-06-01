@@ -5,10 +5,11 @@
 على القناتين R9/L9 بحدود زاوية مستقلّة عن أرجل المشية.
 """
 from spider import hardware
-from spider.config import CAM_SERVO_KEY, SOIL_SERVO_KEY
+from spider.config import CAM_SERVO_KEY, SOIL_SERVO_KEY, AUX_SERVO_MIN, AUX_SERVO_MAX
 
-# حدود مستقلّة (SG90/DS3230 مدى أوسع من الأرجل)
-_LIMITS = {CAM_SERVO_KEY: (0, 180), SOIL_SERVO_KEY: (0, 180)}
+# حدود مستقلّة (SG90/DS3230 مدى أوسع من الأرجل) — تُضبط من config/sensors.json
+_LIMITS = {CAM_SERVO_KEY: (AUX_SERVO_MIN, AUX_SERVO_MAX),
+           SOIL_SERVO_KEY: (AUX_SERVO_MIN, AUX_SERVO_MAX)}
 _state = {CAM_SERVO_KEY: 90, SOIL_SERVO_KEY: 90}
 
 # تعيين اسم منطقي → مفتاح القناة

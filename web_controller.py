@@ -1629,6 +1629,173 @@ def root_dashboard():
 
 
 # ════════════════════════════════════════════════════════════════
+# ── خطة 11: واجهة API خارجية موحّدة /api/v1 (قراءة للأجهزة الخارجية) ──
+#    توثيق كامل: docs/API.md
+# ════════════════════════════════════════════════════════════════
+API_VERSION = "1.0"
+import time as _v1_time
+
+
+def _v1_imu():
+    r = read_bno_single()
+    return {"ready": bool(r), **(r or {})}
+
+
+def _v1_gps():
+    d = dict(_gps.data)
+    d["simulate"] = _gps.simulate
+    return d
+
+
+def _v1_lidar():
+    scan = _lidar.get_scan()
+    vals = [v for v in scan.values() if v]
+    return {
+        "ready": _lidar.ready, "simulate": _lidar.simulate, "kind": _lidar.kind,
+        "points": len(scan),
+        "nearest_mm": round(min(vals)) if vals else None,
+        "scan": {str(a): round(v) for a, v in scan.items()},
+    }
+
+
+def _v1_soil():
+    return {"moisture_pct": _soil.read_percent(), "raw": _soil.read_raw(),
+            "ready": _soil.ready, "simulate": _soil.simulate}
+
+
+def _v1_environment():
+    air = _dht22.read()
+    return {"gas_alarm": _gas.alarm(), "gas_simulate": _gas.simulate,
+            "air_temp_c": air["temp"], "air_humidity_pct": air["humidity"],
+            "dht_simulate": _dht22.simulate}
+
+
+def _v1_thermal(full=False):
+    m = _thermal_cam.read_matrix()
+    if m is None:
+        return {"ready": False, "mode": _thermal_cam.mode}
+    out = {"ready": True, "mode": _thermal_cam.mode,
+           "shape": list(m.shape),
+           "min_c": round(float(m.min()), 1),
+           "max_c": round(float(m.max()), 1),
+           "avg_c": round(float(m.mean()), 1)}
+    if full:
+        out["matrix"] = [[round(float(v), 1) for v in row] for row in m.tolist()]
+    return out
+
+
+def _v1_servos():
+    legs = {k: current[k] for k in current}
+    return {"legs": legs, "aux": _aux.get_state()}
+
+
+def _jpeg_response(frame, quality=80):
+    import cv2
+    ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        return jsonify({"ok": False, "error": "encode failed"}), 500
+    return Response(jpg.tobytes(), mimetype="image/jpeg")
+
+
+@app.route("/api/v1/health")
+def v1_health():
+    return jsonify({
+        "ok": True, "api_version": API_VERSION, "ts": _v1_time.time(),
+        "hardware": HARDWARE,
+        "sources": {
+            "imu": BNO_READY, "gps_sim": _gps.simulate, "lidar_sim": _lidar.simulate,
+            "soil_sim": _soil.simulate, "gas_sim": _gas.simulate,
+            "dht_sim": _dht22.simulate,
+            "rgb_cam": _rgb_cam.backend is not None, "thermal_mode": _thermal_cam.mode,
+        },
+    })
+
+
+@app.route("/api/v1/readings")
+def v1_readings():
+    """لقطة مجمّعة لكل القراءات — الأنسب لجهاز التحليل ليسحبها دورياً."""
+    return jsonify({
+        "ts": _v1_time.time(), "api_version": API_VERSION,
+        "imu": _v1_imu(), "gps": _v1_gps(), "lidar": _v1_lidar(),
+        "soil": _v1_soil(), "environment": _v1_environment(),
+        "thermal": _v1_thermal(full=False), "servos": _v1_servos(),
+    })
+
+
+@app.route("/api/v1/imu")
+def v1_imu():
+    return jsonify(_v1_imu())
+
+
+@app.route("/api/v1/gps")
+def v1_gps():
+    return jsonify(_v1_gps())
+
+
+@app.route("/api/v1/lidar")
+def v1_lidar():
+    return jsonify(_v1_lidar())
+
+
+@app.route("/api/v1/soil")
+def v1_soil():
+    return jsonify(_v1_soil())
+
+
+@app.route("/api/v1/environment")
+def v1_environment():
+    return jsonify(_v1_environment())
+
+
+@app.route("/api/v1/thermal")
+def v1_thermal():
+    full = request.args.get("full", "0") in ("1", "true", "yes")
+    return jsonify(_v1_thermal(full=full))
+
+
+@app.route("/api/v1/servos")
+def v1_servos():
+    return jsonify(_v1_servos())
+
+
+@app.route("/api/v1/camera/rgb.jpg")
+def v1_camera_rgb():
+    """لقطة JPEG مفردة من الكاميرا العادية (GET)."""
+    frame = _rgb_cam.read()
+    if frame is None:
+        return jsonify({"ok": False, "error": "rgb camera unavailable"}), 503
+    return _jpeg_response(frame, int(request.args.get("q", 80)))
+
+
+@app.route("/api/v1/camera/thermal.jpg")
+def v1_camera_thermal():
+    """لقطة JPEG ملوّنة مفردة من الكاميرا الحرارية (GET)."""
+    img = _thermal_cam.colorized()
+    if img is None:
+        return jsonify({"ok": False, "error": "thermal camera unavailable"}), 503
+    return _jpeg_response(img, int(request.args.get("q", 85)))
+
+
+@app.route("/api/v1/aux_servo", methods=["GET", "POST"])
+def v1_aux_servo():
+    """GET = الحالة، POST {which:camera|soil, angle:0..180} = ضبط."""
+    if request.method == "GET":
+        return jsonify({"ok": True, "state": _aux.get_state()})
+    d = request.json or {}
+    ok, res = _aux.set_by_name(d.get("which"), d.get("angle", 90))
+    if not ok:
+        return jsonify({"ok": False, "error": res}), 400
+    return jsonify({"ok": True, "angle": res, "state": _aux.get_state()})
+
+
+@app.route("/api/v1/config")
+def v1_config():
+    """يكشف الإعدادات الفعّالة (من config/sensors.json) للاطّلاع."""
+    from spider import config as _cfg
+    return jsonify({"ok": True, "sensors": _cfg.SENSORS})
+
+
+# ════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print(f"Hardware: {'CONNECTED' if HARDWARE else 'SIMULATION MODE'}")
     print(f"IMU (BNO085): {'READY' if BNO_READY else 'NOT FOUND'}")

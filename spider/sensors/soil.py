@@ -9,7 +9,7 @@ import threading
 import time
 import random
 
-from spider.config import SOIL_PORT, SOIL_BAUD
+from spider.config import SOIL_PORT, SOIL_BAUD, SOIL_DRY_RAW, SOIL_WET_RAW
 
 
 class SoilSensor:
@@ -76,4 +76,4 @@ class SoilSensor:
 
 
 # نسخة وحيدة — USB‑Serial، رجوع تلقائي للمحاكاة بلا عتاد. يلزم استدعاء soil.start().
-soil = SoilSensor(simulate=False)
+soil = SoilSensor(simulate=False, dry_raw=SOIL_DRY_RAW, wet_raw=SOIL_WET_RAW)

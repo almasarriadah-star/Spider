@@ -1,0 +1,13 @@
+{
+  "_README": "عدّل القيم هنا بلا لمس الكود ثم أعد تشغيل السيرفر. راجع docs/HARDWARE_WIRING.md و docs/API.md.",
+
+  "imu":     { "port": "/dev/serial0", "baud": 115200 },
+  "lidar":   { "port": "/dev/ttyAMA2", "baud": 230400, "kind": "ld06", "pwm_gpio": 18 },
+  "gps":     { "port": "/dev/ttyAMA3", "baud": 9600 },
+  "thermal": { "port": "/dev/ttyAMA4", "baud": 115200 },
+  "soil":    { "port": "/dev/ttyUSB0", "baud": 9600, "dry_raw": 26000, "wet_raw": 11000 },
+  "gas":     { "gpio": 6, "active_low": true },
+  "dht22":   { "gpio": 16 },
+  "aux_servo": { "camera_key": "R9", "soil_key": "L9", "min": 0, "max": 180 },
+  "server":  { "host": "0.0.0.0", "port": 5000 }
+}
