@@ -57,41 +57,114 @@ class RGBCamera:
 
 
 class ThermalCamera:
-    """كاميرا حرارية MLX90640 (32×24) عبر I2C. تستخدم i2c_lock لتفادي تشويش ناقل المحركات."""
+    """كاميرا حرارية MLX90640 (32×24).
+    - port=None → I2C مباشر (adafruit_mlx90640) باستخدام i2c_lock.
+    - port=... → موديول بخرج UART (متحكّم على اللوحة يجسر الشريحة إلى تسلسلي).
+    - simulate=True → مصفوفة وهمية للاختبار بلا عتاد.
+    في كل الأوضاع تبقى الواجهة موحّدة: read_matrix() يُرجع مصفوفة 24×32 °C أو None.
+    """
 
-    def __init__(self, i2c_lock=None):
+    def __init__(self, i2c_lock=None, port=None, baud=115200, simulate=False,
+                 rows=24, cols=32):
         self.lock = i2c_lock
         self.ready = False
-        self.last_frame = None  # مصفوفة 24×32 درجات مئوية
-        self.shape = (24, 32)
-        try:
-            import board
-            import busio
-            import adafruit_mlx90640
-            i2c = busio.I2C(board.SCL, board.SDA, frequency=400000)
-            self.mlx = adafruit_mlx90640.MLX90640(i2c)
-            self.mlx.refresh_rate = adafruit_mlx90640.RefreshRate.REFRESH_8_HZ
+        self.last_frame = None          # مصفوفة 24×32 درجات مئوية
+        self.shape = (rows, cols)
+        self.mode = None
+        self.simulate = simulate
+        self._ser = None
+        self.mlx = None
+        self._stop = threading.Event()
+
+        if simulate:
+            self.mode = "sim"
             self.ready = True
+            threading.Thread(target=self._sim_loop, daemon=True).start()
+        elif port:
+            try:
+                import serial
+                self._ser = serial.Serial(port, baud, timeout=0.5)
+                self.mode = "uart"
+                self.ready = True
+                threading.Thread(target=self._uart_loop, daemon=True).start()
+            except Exception:
+                self.ready = False      # بلا عتاد (مثلاً ويندوز) — تبقى الإطارات None
+        else:
+            try:
+                import board
+                import busio
+                import adafruit_mlx90640
+                i2c = busio.I2C(board.SCL, board.SDA, frequency=400000)
+                self.mlx = adafruit_mlx90640.MLX90640(i2c)
+                self.mlx.refresh_rate = adafruit_mlx90640.RefreshRate.REFRESH_8_HZ
+                self.mode = "i2c"
+                self.ready = True
+            except Exception:
+                self.ready = False
+
+    def stop(self):
+        self._stop.set()
+        if self._ser:
+            try:
+                self._ser.close()
+            except Exception:
+                pass
+
+    def _uart_loop(self):
+        """يقرأ إطارات الموديول التسلسلي ويملأ last_frame.
+        ⚠️ صيغة الإطار يحدّدها مصنّع الموديول — أكمل الفك أدناه حسب ورقته.
+        النمط العام: مزامنة رأس → قراءة rows*cols قيمة → تحويل لمصفوفة °C."""
+        import numpy as np
+        rows, cols = self.shape
+        npix = rows * cols
+        try:
+            while not self._stop.is_set():
+                # TODO: استبدل هذا بالفك الحقيقي حسب بروتوكول موديولك.
+                # مثال شائع: 0x5A 0x5A ثم npix قيمة uint16 (درجة×100) little-endian:
+                #   raw = self._ser.read(2 + npix*2)
+                #   vals = struct.unpack_from("<%dH" % npix, raw, 2)
+                #   m = np.array(vals, float).reshape(self.shape) / 100.0
+                #   self.last_frame = m
+                line = self._ser.readline()       # قراءة آمنة افتراضية حتى يُكمَّل الفك
+                if not line:
+                    continue
+                self.ready = True
         except Exception:
             self.ready = False
 
-    def read_matrix(self):
-        if not self.ready:
-            return self.last_frame
+    def _sim_loop(self):
         import numpy as np
-        buf = [0] * 768
-        try:
-            if self.lock:
-                self.lock.acquire()
-            self.mlx.getFrame(buf)
-        except Exception:
-            return self.last_frame
-        finally:
-            if self.lock:
-                self.lock.release()
-        m = np.array(buf, dtype=float).reshape(self.shape)
-        self.last_frame = m
-        return m
+        import time as _t
+        rows, cols = self.shape
+        t = 0
+        while not self._stop.is_set():
+            m = 22 + np.random.rand(rows, cols) * 4
+            hr, hc = t % rows, (t * 2) % cols     # بقعة ساخنة متحرّكة
+            m[hr, hc] = 38 + np.random.rand() * 6
+            self.last_frame = m
+            t += 1
+            _t.sleep(0.2)
+
+    def read_matrix(self):
+        if self.mode == "i2c":
+            if not self.ready:
+                return self.last_frame
+            import numpy as np
+            buf = [0] * 768
+            try:
+                if self.lock:
+                    self.lock.acquire()
+                self.mlx.getFrame(buf)
+            except Exception:
+                return self.last_frame
+            finally:
+                if self.lock:
+                    self.lock.release()
+            m = np.array(buf, dtype=float).reshape(self.shape)
+            self.last_frame = m
+            return m
+        # uart / sim — الخيوط تحدّث last_frame
+        return self.last_frame
 
     def colorized(self, scale=16):
         """يحوّل المصفوفة لصورة ملوّنة مكبّرة بـ colormap Inferno."""

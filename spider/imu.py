@@ -14,7 +14,8 @@ bno_zero_pitch = 0.0
 try:
     import serial
     from adafruit_bno08x_rvc import BNO08x_RVC
-    _uart = serial.Serial("/dev/serial0", 115200, timeout=0.5)
+    from spider.config import IMU_PORT
+    _uart = serial.Serial(IMU_PORT, 115200, timeout=0.5)
     bno = BNO08x_RVC(_uart)
     BNO_READY = True
 except Exception:

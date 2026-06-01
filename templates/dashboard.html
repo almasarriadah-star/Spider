@@ -286,7 +286,7 @@ select{background:#131318;color:#e0e0e0;border:1px solid #333;border-radius:8px;
 
   <!-- ليدار -->
   <div class="card">
-    <h3>📡 الليدار (مسافة أمامية) <span id="lidarStatusTxt" style="font-size:10px;color:#666"></span></h3>
+    <h3>📡 الليدار LD06 (مسح 360°) <span id="lidarStatusTxt" style="font-size:10px;color:#666"></span></h3>
     <canvas id="radarCanvas" width="280" height="280"></canvas>
     <div style="text-align:center;margin-top:8px">
       <button class="btn btn-blue" onclick="lidarProject()">📍 أسقِط على الخريطة</button>
@@ -314,6 +314,40 @@ select{background:#131318;color:#e0e0e0;border:1px solid #333;border-radius:8px;
       <a class="btn btn-purple btn-full" href="/map" target="_blank">🗺️ الخريطة</a>
     </div>
     <div id="surveyStatusTxt" style="font-size:11px;color:#666;text-align:center;margin-top:6px"></div>
+  </div>
+
+  <!-- البيئة: غاز MQ135 + DHT22 -->
+  <div class="card">
+    <h3>🌡️ البيئة <span id="envStatusTxt" style="font-size:10px;color:#666"></span></h3>
+    <div class="grid2">
+      <div class="sensor-val">
+        <div class="label">حرارة الجو</div>
+        <div class="num" id="airTemp" style="color:#f0883e">--°</div>
+      </div>
+      <div class="sensor-val">
+        <div class="label">رطوبة الجو</div>
+        <div class="num" id="airHum" style="color:#58a6ff">--%</div>
+      </div>
+      <div class="sensor-val">
+        <div class="label">الغاز (MQ135)</div>
+        <div class="num" id="gasState" style="color:#3fb950">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- سيرفوات الميكانزم -->
+  <div class="card">
+    <h3>🎛️ سيرفوات الميكانزم</h3>
+    <div style="margin-bottom:10px">
+      <div class="label">سيرفو الكاميرا (SG90 · R9): <span id="camAngLbl">90°</span></div>
+      <input type="range" id="camServo" min="0" max="180" step="1" value="90"
+             style="width:100%" oninput="auxServo('camera',this.value,'camAngLbl')">
+    </div>
+    <div>
+      <div class="label">سيرفو التربة (DS3230 · L9): <span id="soilAngLbl">90°</span></div>
+      <input type="range" id="soilServo" min="0" max="180" step="1" value="90"
+             style="width:100%" oninput="auxServo('soil',this.value,'soilAngLbl')">
+    </div>
   </div>
 
   <!-- IMU -->
@@ -600,10 +634,10 @@ const RC=140, MAXD=3000;
 async function drawRadar(){
   try{
     const d = await apiFetch('/api/lidar/scan');
-    const distTxt = d.distance_mm ? `${(d.distance_mm/10).toFixed(0)} سم` : '—';
+    const npts = Object.keys(d.scan||{}).length;
     document.getElementById('lidarStatusTxt').textContent =
-      d.simulate ? `🟡 محاكاة (${distTxt})`
-                 : (d.ready ? `🟢 ${distTxt}` : '🔴 غير متصل');
+      d.simulate ? `🟡 محاكاة (${npts} نقطة)`
+                 : (d.ready ? `🟢 ${npts} نقطة` : '🔴 غير متصل');
     rx.clearRect(0,0,280,280);
     rx.strokeStyle='#1a2a2a'; rx.lineWidth=1;
     for(const r of [35,70,105,140]){ rx.beginPath(); rx.arc(RC,RC,r,0,7); rx.stroke(); }
@@ -648,6 +682,31 @@ async function toggleSurvey(){
   document.getElementById('surveyStatusTxt').textContent=surveyOn?'✅ المسح الآلي شغّال':'';
 }
 setInterval(soilNow,3000); soilNow();
+
+// ════ البيئة: غاز + DHT22 ════
+async function envNow(){
+  try{
+    const d=await apiFetch('/api/environment');
+    document.getElementById('airTemp').textContent =
+      (d.air_temp==null?'--':d.air_temp)+'°';
+    document.getElementById('airHum').textContent =
+      (d.air_humidity==null?'--':d.air_humidity)+'%';
+    const g=document.getElementById('gasState');
+    g.textContent = d.gas_alarm ? '⚠️ خطر' : '✓ آمن';
+    g.style.color = d.gas_alarm ? '#f85149' : '#3fb950';
+    document.getElementById('envStatusTxt').textContent =
+      (d.dht_sim||d.gas_sim) ? '🟡 محاكاة' : '🟢';
+  }catch(e){}
+}
+setInterval(()=>{ if(document.getElementById('tab-sensors').classList.contains('active')) envNow(); },1500); envNow();
+
+// ════ سيرفوات الميكانزم ════
+let _auxTimer=null;
+function auxServo(which, val, lblId){
+  document.getElementById(lblId).textContent = val+'°';
+  clearTimeout(_auxTimer);
+  _auxTimer = setTimeout(()=>apiFetch('/api/aux_servo','POST',{which:which,angle:parseInt(val)}), 60);
+}
 
 // ════ GPS chip ════
 async function gpsStatus(){

@@ -41,3 +41,27 @@ def reload():
     global _LIM
     _LIM = _load_limits()
     print("[config] servo_limits reloaded")
+
+
+# ════════════════════════════════════════════════════════════════
+# ── منافذ الحساسات والأقطاب (راجع docs/HARDWARE_WIRING.md) ──
+# ════════════════════════════════════════════════════════════════
+IMU_PORT       = "/dev/serial0"  # UART0 — BNO085
+LIDAR_PORT     = "/dev/ttyAMA2"  # UART3 — LD06
+LIDAR_BAUD     = 230400          # LD06 دوّار 360°
+LIDAR_KIND     = "ld06"          # بروتوكول LD06 (رأس 0x54 0x2C)
+LIDAR_PWM_GPIO = 18              # BCM (p12) — تحكّم موتور دوران LD06
+GPS_PORT       = "/dev/ttyAMA3"  # UART4
+GPS_BAUD       = 9600
+THERMAL_PORT   = "/dev/ttyAMA4"  # UART5 — موديول MLX90640 بخرج UART
+THERMAL_BAUD   = 115200          # ⚠️ عدّل حسب ورقة الموديول
+SOIL_PORT      = "/dev/ttyUSB0"  # رطوبة التربة عبر محوّل USB‑Serial
+SOIL_BAUD      = 9600            # ⚠️ عدّل حسب الموديول
+
+GAS_DO_GPIO    = 6               # BCM — خرج رقمي للغاز MQ135
+GAS_ACTIVE_LOW = True            # True لو يعطي LOW عند الإنذار (فعّال-منخفض، شائع في MQ)
+DHT22_GPIO     = 16              # BCM — خط بيانات DHT22 (حرارة + رطوبة الجو)
+
+# سيرفوات مساعدة على PCA9685 (القنوات 9 الفاضية — الأرجل تستخدم 0–8)
+CAM_SERVO_KEY  = "R9"            # SG90 — ميكانزم الكاميرا (لوحة اليمين 0x40)
+SOIL_SERVO_KEY = "L9"            # DS3230 — ميكانزم التربة (لوحة الشمال 0x44)

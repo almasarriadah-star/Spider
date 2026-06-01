@@ -104,5 +104,6 @@ class GPS:
         return -d if hemi in ("S", "W") else round(d, 7)
 
 
-# نسخة وحيدة عامة — simulate=True حتى توصيل الشريحة
-gps = GPS(simulate=True)
+# نسخة وحيدة عامة — GPS حقيقي على UART4 (/dev/ttyAMA3)، رجوع تلقائي للمحاكاة بلا عتاد.
+from spider.config import GPS_PORT, GPS_BAUD
+gps = GPS(port=GPS_PORT, baud=GPS_BAUD, simulate=False)

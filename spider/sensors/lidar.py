@@ -36,14 +36,18 @@ class Lidar:
         self.ready = False
         self._dev = None
         self._ser = None
+        self._pwm = None
 
         if not simulate:
-            ok = self._open_tfmini() if kind == "tfmini" else self._open_rplidar()
+            if kind == "rplidar":
+                ok = self._open_rplidar()
+            else:                       # tfmini / ld06 — كلاهما UART تسلسلي
+                ok = self._open_serial()
             if not ok:
                 self.simulate = True   # رجوع تلقائي للمحاكاة عند غياب العتاد (مثلاً على ويندوز)
 
     # ── فتح الأجهزة ──
-    def _open_tfmini(self):
+    def _open_serial(self):
         try:
             import serial
             self._ser = serial.Serial(self.port, self.baud, timeout=0.2)
@@ -63,10 +67,29 @@ class Lidar:
 
     # ── دورة الحياة ──
     def start(self):
+        if self.kind == "ld06" and not self.simulate:
+            self._start_motor()
         threading.Thread(target=self._loop, name="LidarThread", daemon=True).start()
+
+    def _start_motor(self):
+        """يُخرج PWM لتشغيل موتور دوران LD06 (GPIO18)."""
+        try:
+            import RPi.GPIO as GPIO
+            from spider.config import LIDAR_PWM_GPIO
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(LIDAR_PWM_GPIO, GPIO.OUT)
+            self._pwm = GPIO.PWM(LIDAR_PWM_GPIO, 10000)   # ~10kHz
+            self._pwm.start(40)                            # 40% duty للدوران الافتراضي
+        except Exception:
+            self._pwm = None   # على ويندوز/بلا عتاد — يُتجاهَل
 
     def stop(self):
         self._stop.set()
+        if self._pwm:
+            try:
+                self._pwm.stop()
+            except Exception:
+                pass
         if self._dev:
             try:
                 self._dev.stop()
@@ -82,6 +105,8 @@ class Lidar:
     def _loop(self):
         if self.simulate:
             self._sim_loop()
+        elif self.kind == "ld06":
+            self._real_loop_ld06()
         elif self.kind == "tfmini":
             self._real_loop_tfmini()
         else:
@@ -134,6 +159,53 @@ class Lidar:
                 ser.close()
             except Exception:
                 pass
+
+    # ── قراءة LD06 دوّار 360° عبر UART (230400) ──
+    def _real_loop_ld06(self):
+        """LD06: حزمة 47 بايت، رأس 0x54 0x2C، 12 نقطة/حزمة.
+        كل حزمة تغطّي قطاعاً صغيراً → نُراكم في scan لبناء 360° كاملة."""
+        ser = self._ser
+        PKT = 47
+        buf = b""
+        try:
+            while not self._stop.is_set():
+                chunk = ser.read(PKT)
+                if chunk:
+                    buf += chunk
+                while len(buf) >= PKT:
+                    if buf[0] == 0x54 and buf[1] == 0x2C:
+                        self._parse_ld06(buf[:PKT])
+                        self.ready = True
+                        buf = buf[PKT:]
+                    else:
+                        buf = buf[1:]   # ابحث عن رأس الحزمة
+        except Exception:
+            self.ready = False
+        finally:
+            try:
+                ser.close()
+            except Exception:
+                pass
+
+    def _parse_ld06(self, pkt):
+        import struct
+        start = struct.unpack_from("<H", pkt, 4)[0]    # 0.01 درجة
+        end = struct.unpack_from("<H", pkt, 42)[0]     # 0.01 درجة
+        n = 12
+        span = (end - start) % 36000                   # يعالج التفاف 360°
+        step = span / (n - 1) if n > 1 else 0
+        new = {}
+        for i in range(n):
+            off = 6 + i * 3
+            dist = struct.unpack_from("<H", pkt, off)[0]   # مم
+            if dist <= 0:
+                continue
+            ang = ((start + step * i) / 100.0) % 360.0
+            new[int(ang) % 360] = dist
+        if new:
+            with self._lock:
+                self.scan.update(new)                      # دمج تدريجي
+                self.distance_mm = self.scan.get(0, self.distance_mm)
 
     # ── قراءة RPLIDAR دوّار عبر USB ──
     def _real_loop_rplidar(self):
@@ -202,6 +274,7 @@ def obstacles_world(scan, lat, lon, heading_deg, max_mm=2000, step=10):
     return pts
 
 
-# نسخة وحيدة عامة — TFmini عبر UART على /dev/serial0.
+# نسخة وحيدة عامة — LD06 دوّار 360° عبر UART3 (/dev/ttyAMA2 @ 230400).
 # تحاول قراءة العتاد فعلياً، وترجع للمحاكاة تلقائياً إن لم يتوفّر المنفذ (مثلاً على ويندوز).
-lidar = Lidar(port="/dev/serial0", baud=115200, kind="tfmini", simulate=False)
+from spider.config import LIDAR_PORT, LIDAR_BAUD, LIDAR_KIND
+lidar = Lidar(port=LIDAR_PORT, baud=LIDAR_BAUD, kind=LIDAR_KIND, simulate=False)

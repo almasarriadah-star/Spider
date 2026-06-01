@@ -1326,9 +1326,11 @@ def api_move():
 from flask import Response
 from spider.sensors.camera import RGBCamera, ThermalCamera
 from spider.hardware import i2c_lock as _i2c_lock
+from spider.config import THERMAL_PORT as _THERMAL_PORT, THERMAL_BAUD as _THERMAL_BAUD
 
 _rgb_cam = RGBCamera()
-_thermal_cam = ThermalCamera(i2c_lock=_i2c_lock)
+# موديول MLX90640 بخرج UART على UART5 — رجوع تلقائي بلا عتاد (مثلاً على ويندوز).
+_thermal_cam = ThermalCamera(i2c_lock=_i2c_lock, port=_THERMAL_PORT, baud=_THERMAL_BAUD)
 
 
 @app.route("/video/rgb")
@@ -1476,10 +1478,45 @@ def lidar_project():
 
 
 # ════════════════════════════════════════════════════════════════
+# ── خطة 10: غاز MQ135 + DHT22 + سيرفوات مساعدة ──
+# ════════════════════════════════════════════════════════════════
+from spider.sensors.digital import gas as _gas, dht22 as _dht22
+from spider.sensors import aux_servo as _aux
+
+
+@app.route("/api/environment")
+def environment_read():
+    """إنذار الغاز (MQ135) + حرارة/رطوبة الجو (DHT22)."""
+    air = _dht22.read()
+    return jsonify({
+        "gas_alarm": _gas.alarm(), "gas_sim": _gas.simulate,
+        "air_temp": air["temp"], "air_humidity": air["humidity"],
+        "dht_sim": _dht22.simulate,
+    })
+
+
+@app.route("/api/aux_servo", methods=["POST"])
+def aux_servo_set():
+    """يضبط زاوية سيرفو مساعد: which=camera|soil, angle=0..180."""
+    d = request.json or {}
+    ok, res = _aux.set_by_name(d.get("which"), d.get("angle", 90))
+    if not ok:
+        return jsonify({"ok": False, "error": res})
+    return jsonify({"ok": True, "angle": res, "state": _aux.get_state()})
+
+
+@app.route("/api/aux_servo")
+def aux_servo_state():
+    return jsonify({"ok": True, "state": _aux.get_state()})
+
+
+# ════════════════════════════════════════════════════════════════
 # ── خطة 09: رطوبة التربة + كشف الأعشاب + مسح آلي ──
 # ════════════════════════════════════════════════════════════════
 from spider.sensors.soil import soil as _soil
 from spider.vision.weeds import analyze_frame as _analyze_frame, classify_weed as _classify_weed
+
+_soil.start()   # رطوبة التربة صارت USB‑Serial — تحتاج خيط قراءة
 
 import time as _time_mod
 
