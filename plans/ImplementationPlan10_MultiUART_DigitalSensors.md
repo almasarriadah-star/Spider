@@ -42,27 +42,40 @@
 
 ```python
 # ── منافذ الحساسات (راجع docs/HARDWARE_WIRING.md) ──
-IMU_PORT      = "/dev/serial0"   # UART0 — BNO085
-LIDAR_PORT    = "/dev/ttyAMA2"   # UART3
-GPS_PORT      = "/dev/ttyAMA3"   # UART4
-THERMAL_PORT  = "/dev/ttyAMA4"   # UART5
-THERMAL_BAUD  = 115200           # ⚠️ عدّل حسب موديل الكاميرا
-SOIL_PORT     = "/dev/ttyUSB0"   # رطوبة التربة عبر محوّل USB‑Serial
-SOIL_BAUD     = 9600             # ⚠️ عدّل حسب الموديول
+IMU_PORT       = "/dev/serial0"  # UART0 — BNO085
+LIDAR_PORT     = "/dev/ttyAMA2"  # UART3 — LD06
+LIDAR_BAUD     = 230400          # LD06 دوّار 360°
+LIDAR_KIND     = "ld06"          # بروتوكول LD06 (رأس 0x54 0x2C)
+LIDAR_PWM_GPIO = 18              # BCM (p12) — تحكّم موتور دوران LD06
+GPS_PORT       = "/dev/ttyAMA3"  # UART4
+THERMAL_PORT   = "/dev/ttyAMA4"  # UART5 — موديول MLX90640 بخرج UART
+THERMAL_BAUD   = 115200          # ⚠️ عدّل حسب ورقة الموديول
+SOIL_PORT      = "/dev/ttyUSB0"  # رطوبة التربة عبر محوّل USB‑Serial
+SOIL_BAUD      = 9600            # ⚠️ عدّل حسب الموديول
 
-GAS_DO_GPIO    = 6               # BCM — خرج رقمي للغاز
+GAS_DO_GPIO    = 6               # BCM — خرج رقمي للغاز MQ135
 GAS_ACTIVE_LOW = True            # True لو يعطي LOW عند الإنذار (فعّال-منخفض، شائع في MQ)
 
 DHT22_GPIO     = 16              # BCM — خط بيانات DHT22 (حرارة + رطوبة الجو، سلك-واحد)
+
+# ── سيرفوات مساعدة على PCA9685 (قنوات 9 الفاضية، الأرجل تستخدم 0–8) ──
+CAM_SERVO_KEY  = "R9"            # SG90 — ميكانزم الكاميرا (لوحة اليمين 0x40)
+SOIL_SERVO_KEY = "L9"            # DS3230 — ميكانزم التربة (لوحة الشمال 0x44)
 ```
 
 ### 3.2 الليدار — `spider/sensors/lidar.py`
-تغيير المنفذ الافتراضي للنسخة العامة فقط:
+LD06 ليدار دوّار 360° ببروتوكول مختلف عن TFmini → نضيف `kind="ld06"` بمفكّك حزمته
+(رأس `0x54 0x2C`، 12 نقطة/حزمة، توزيع زوايا خطّي بين start/end angle)، وسرعة 230400.
+ثم النسخة العامة:
 
 ```python
-from spider.config import LIDAR_PORT
-lidar = Lidar(port=LIDAR_PORT, baud=115200, kind="tfmini", simulate=False)
+from spider.config import LIDAR_PORT, LIDAR_BAUD, LIDAR_KIND
+lidar = Lidar(port=LIDAR_PORT, baud=LIDAR_BAUD, kind=LIDAR_KIND, simulate=False)
 ```
+
+> ✅ LD06 يعطي **مسح 360° كامل** → يملأ `scan` dict مباشرة فتعمل لوحة الرادار وإسقاط
+> الخريطة بلا تغيير (أفضل من TFmini النقطة الواحدة).
+> 🌀 موتور الدوران: أخرج PWM من `LIDAR_PWM_GPIO` (GPIO18، ~40% duty) لتشغيل الدوران.
 
 ### 3.3 GPS — `spider/sensors/gps.py`
 ```python
@@ -310,9 +323,51 @@ def environment_read():
 ```
 > رطوبة التربة تبقى على مسارها الحالي `/api/soil` لكن المصدر صار USB (يلزم `_soil.start()`).
 
-### 3.9 الواجهة — `templates/dashboard.html`
+### 3.9 سيرفوات مساعدة — `spider/sensors/aux_servo.py` + مسار API
+السيرفوان الجديدان ليسا أرجلاً، فلا يمرّان عبر مولّد المشية (gait). نكتبهما مباشرة عبر
+طبقة الهاردوير على قناتي PCA الفاضيتين (R9/L9) مع حدود زاوية خاصّة.
+
+```python
+# spider/sensors/aux_servo.py
+"""تحكّم بسيط بسيرفوات مساعدة (كاميرا/تربة) على قنوات PCA9685 الفاضية."""
+from spider import hardware
+from spider.config import CAM_SERVO_KEY, SOIL_SERVO_KEY
+
+# حدود مستقلّة عن أرجل المشية (SG90/DS3230 مدى أوسع)
+_LIMITS = {CAM_SERVO_KEY: (0, 180), SOIL_SERVO_KEY: (0, 180)}
+_state  = {CAM_SERVO_KEY: 90, SOIL_SERVO_KEY: 90}
+
+def set_angle(key, angle):
+    lo, hi = _LIMITS.get(key, (0, 180))
+    angle = max(lo, min(hi, int(angle)))
+    _state[key] = angle
+    hardware.write_servo_raw(key, angle)   # يكتب مباشرة على قناة PCA
+    return angle
+
+def get_state():
+    return dict(_state)
+```
+```python
+# web_controller.py
+from spider.sensors import aux_servo as _aux
+from spider.config import CAM_SERVO_KEY, SOIL_SERVO_KEY
+
+@app.route("/api/aux_servo", methods=["POST"])
+def aux_servo_set():
+    d = request.get_json(force=True)
+    key = {"camera": CAM_SERVO_KEY, "soil": SOIL_SERVO_KEY}.get(d.get("which"))
+    if not key:
+        return jsonify({"ok": False, "error": "which=camera|soil"})
+    return jsonify({"ok": True, "angle": _aux.set_angle(key, d.get("angle", 90))})
+```
+> ⚠️ `hardware.write_servo_raw` يقبل المفاتيح `R9`/`L9` كما هي (يفصل الحرف الأول جهةً
+> والباقي رقم القناة) — لا تعديل مطلوب على `hardware.py`. تأكّد أن `pwm_release_all`
+> (الذي يلفّ القنوات 0–15) يطفئ هاتين القناتين عند الطوارئ — وهو كذلك أصلاً.
+
+### 3.10 الواجهة — `templates/dashboard.html`
 - بطاقة كاميرا حرارية: شبكة 8×8 ملوّنة (heatmap) + min/max/avg، تستهلك `/api/thermal`.
 - بطاقة بيئة: حرارة الجو + رطوبة الجو (DHT22) + لمبة إنذار غاز من `/api/environment` كل ~1s.
+- منزلقان (sliders) لزاويتي سيرفو الكاميرا والتربة → `POST /api/aux_servo`.
 
 ---
 
@@ -327,18 +382,22 @@ def environment_read():
 ---
 
 ## 5) معايير القبول
-- ✅ كل جهاز UART على منفذه دون تصادم (IMU/Lidar/GPS/Thermal).
+- ✅ كل جهاز UART على منفذه دون تصادم (IMU/LD06/GPS/Thermal).
+- ✅ LD06 يعطي مسح 360° حيّ على لوحة الرادار + إسقاط على الخريطة.
 - ✅ قراءة الكاميرا الحرارية (إطار + min/max) وعرضها.
 - ✅ إنذار غاز رقمي + قراءة DHT22 (حرارة/رطوبة الجو) تظهر في الواجهة.
 - ✅ رطوبة التربة تُقرأ من `/dev/ttyUSB0` (USB) لا من I2C.
+- ✅ سيرفو الكاميرا (R9) وسيرفو التربة (L9) يتحرّكان من الواجهة دون تأثير على المشية.
 - ✅ كل شيء يعمل بالمحاكاة على ويندوز (رجوع تلقائي).
-- ✅ لا تعارض مع ناقل I2C للسيرفوات.
+- ✅ ناقل I2C للسيرفوات (0x40/0x44) فقط — بلا تعارض.
 
 ---
 
 ## 6) مخاطر ومحاذير
 - **أسماء ttyAMAx غير مضمونة الترتيب** → استخدم udev للأسماء الثابتة.
-- **منطق 5V على DO** يُتلف GPIO → مقسّم جهد/مبدّل مستوى إلزامي للغاز.
-- **بروتوكول الكاميرا الحرارية مجهول** → `_real_loop` فيها `TODO` يُكمَّل بعد الـ datasheet.
-- **الأرضي المشترك** بين كل المصادر شرط لعمل UART.
+- **منطق 5V على DO/TX** يُتلف GPIO → مقسّم جهد/مبدّل مستوى إلزامي للغاز وأي خرج 5V.
+- **بروتوكول موديول الكاميرا الحرارية يحدّده المصنّع** → `_real_loop` فيها `TODO` يُكمَّل بعد ورقة الموديول، وكذلك `THERMAL_BAUD`.
+- **LD06 يلزمه PWM للدوران** → بلا إشارة PWM قد لا يدور؛ تيار الموتور ~200mA.
+- **DS3230 عالي العزم** → تأكّد أن ريل تغذية السيرفوات يحتمل ذروة تياره مع الأرجل.
+- **الأرضي المشترك** بين كل المصادر شرط لعمل UART والسيرفوات.
 ```
