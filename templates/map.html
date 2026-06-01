@@ -46,7 +46,7 @@ body { background: #0d0d0f; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 <div id="map"></div>
 
 <script>
-const DEF_LAT = 31.9539, DEF_LON = 35.9106;
+const DEF_LAT = 34.068448, DEF_LON = 36.746721;   // موقع افتراضي عند غياب fix
 const map = L.map('map').setView([DEF_LAT, DEF_LON], 18);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -118,12 +118,20 @@ const es = new EventSource('/api/stream');
 es.onmessage = e => {
   try {
     const d = JSON.parse(e.data);
-    if (d.gps && d.gps.fix) {
+    if (d.gps) {
       const ll = [d.gps.lat, d.gps.lon];
       robotMarker.setLatLng(ll);
-      if (!map._spiderCentered) { map.setView(ll, 18); map._spiderCentered = true; }
-      document.getElementById('gpsStatus').textContent =
-        `📡 ${d.gps.sats} قمر | ${d.gps.speed} م/ث | ${d.gps.lat.toFixed(5)}, ${d.gps.lon.toFixed(5)}${d.gps.fix && d.gps.simulate !== false ? ' (محاكاة)' : ''}`;
+      const real = d.gps.fix && !d.gps.estimated;
+      if (real && !map._spiderCentered) { map.setView(ll, 18); map._spiderCentered = true; }
+      const el = document.getElementById('gpsStatus');
+      if (real) {
+        el.textContent = `🟢 موقع حقيقي | 📡 ${d.gps.sats} قمر | ${d.gps.speed} م/ث | ${d.gps.lat.toFixed(6)}, ${d.gps.lon.toFixed(6)}`;
+        el.style.color = '';
+      } else {
+        const why = d.gps.simulate ? 'محاكاة' : `لا fix — ${d.gps.sats||0} قمر`;
+        el.textContent = `🟡 موقع تقديري (${why}) ${d.gps.lat.toFixed(6)}, ${d.gps.lon.toFixed(6)} — ⚠️ ضع الجهاز بمكان مكشوف السماء`;
+        el.style.color = '#d29922';
+      }
     }
   } catch(err) {}
 };

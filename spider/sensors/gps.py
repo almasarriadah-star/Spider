@@ -12,7 +12,8 @@ class GPS:
         self.data = {
             "lat": sim_origin[0], "lon": sim_origin[1],
             "fix": False, "sats": 0,
-            "speed": 0.0, "course": 0.0, "ts": 0
+            "speed": 0.0, "course": 0.0, "ts": 0,
+            "estimated": True   # True طالما لا يوجد fix حقيقي (الموقع افتراضي)
         }
         self._stop = threading.Event()
         self._ser = None
@@ -63,6 +64,7 @@ class GPS:
             "lat": round(self._sim["lat"], 7),
             "lon": round(self._sim["lon"], 7),
             "fix": True,
+            "estimated": True,   # محاكاة — ليس موقعاً حقيقياً
             "sats": 9,
             "speed": round(speed, 2),
             "course": round(self._sim["course"], 1),
@@ -82,6 +84,7 @@ class GPS:
                     "lat": self._nmea_deg(p[3], p[4]),
                     "lon": self._nmea_deg(p[5], p[6]),
                     "fix": True,
+                    "estimated": False,   # موقع حقيقي من الأقمار
                     "speed": float(p[7] or 0) * 0.514,  # عقدة → م/ث
                     "course": float(p[8] or 0),
                     "ts": time.time()
@@ -104,6 +107,8 @@ class GPS:
         return -d if hemi in ("S", "W") else round(d, 7)
 
 
-# نسخة وحيدة عامة — GPS حقيقي على UART4 (/dev/ttyAMA3)، رجوع تلقائي للمحاكاة بلا عتاد.
-from spider.config import GPS_PORT, GPS_BAUD
-gps = GPS(port=GPS_PORT, baud=GPS_BAUD, simulate=False)
+# نسخة وحيدة عامة — GPS حقيقي على UART4، رجوع تلقائي للمحاكاة بلا عتاد.
+# الموقع الافتراضي (عند غياب fix) من config/sensors.json.
+from spider.config import GPS_PORT, GPS_BAUD, GPS_FALLBACK_LAT, GPS_FALLBACK_LON
+gps = GPS(port=GPS_PORT, baud=GPS_BAUD, simulate=False,
+          sim_origin=(GPS_FALLBACK_LAT, GPS_FALLBACK_LON))

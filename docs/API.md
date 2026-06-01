@@ -60,10 +60,15 @@
 
 ### `GET /api/v1/gps`
 ```json
-{ "lat": 31.9539, "lon": 35.9106, "fix": true, "sats": 9,
-  "speed": 0.0, "course": 0.0, "ts": 1748736000.0, "simulate": false }
+{ "lat": 34.068448, "lon": 36.746721, "fix": false, "sats": 0,
+  "speed": 0.0, "course": 0.0, "ts": 0, "simulate": false,
+  "estimated": true, "source": "default_estimate" }
 ```
-`speed` م/ث، `course`/heading بالدرجات. عند `fix=false` الإحداثيات قد تكون آخر/افتراضية.
+`speed` م/ث، `course`/heading بالدرجات.
+- **`estimated`**: `true` لو الموقع **تقديري** (لا يوجد fix أو محاكاة)، `false` لو **حقيقي**.
+- **`source`**: `"gps_fix"` (موقع حقيقي من الأقمار) · `"default_estimate"` (الموقع الافتراضي
+  من `config/sensors.json → gps.lat/lon` لغياب الـ fix) · `"simulation"` (وضع المحاكاة).
+- عند `estimated=true` تكون `lat/lon` هي النقطة الافتراضية المضبوطة في الإعدادات، لا موقعاً مقيساً.
 
 ### `GET /api/v1/lidar`
 ```json

@@ -1393,9 +1393,20 @@ _gps.start()
 threading.Thread(target=_gps_feeder, name="GPSFeeder", daemon=True).start()
 
 
+def _gps_enriched():
+    """بيانات GPS + حالة الموقع: حقيقي (fix) أم تقديري (افتراضي/محاكاة)."""
+    d = dict(_gps.data)
+    fix = bool(d.get("fix"))
+    d["simulate"] = _gps.simulate
+    d["estimated"] = (not fix) or _gps.simulate
+    d["source"] = ("simulation" if _gps.simulate
+                   else ("gps_fix" if fix else "default_estimate"))
+    return d
+
+
 @app.route("/api/gps/now")
 def gps_now():
-    return jsonify(_gps.data)
+    return jsonify(_gps_enriched())
 
 
 @app.route("/api/gps/track")
@@ -1419,7 +1430,7 @@ def sensor_stream():
     def gen():
         while True:
             payload = {
-                "gps": _gps.data,
+                "gps": _gps_enriched(),
                 "gait": {
                     "running": gait_running,
                     "phase": gait_current_phase,
@@ -1651,9 +1662,7 @@ def _v1_imu():
 
 
 def _v1_gps():
-    d = dict(_gps.data)
-    d["simulate"] = _gps.simulate
-    return d
+    return _gps_enriched()
 
 
 def _v1_lidar():

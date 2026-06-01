@@ -53,7 +53,8 @@ SENSORS_FILE = os.path.join(CONFIG_DIR, "sensors.json")
 SENSORS_DEFAULT = {
     "imu":     {"port": "/dev/serial0", "baud": 115200},
     "lidar":   {"port": "/dev/ttyAMA3", "baud": 230400, "kind": "ld06", "pwm_gpio": 18},
-    "gps":     {"port": "/dev/ttyAMA4", "baud": 9600},
+    "gps":     {"port": "/dev/ttyAMA4", "baud": 9600,
+                "lat": 34.068448, "lon": 36.746721},   # موقع افتراضي عند غياب fix
     # موديول GY-MCU90640 (HY-18): إطار 1544 بايت، رأس 5A5A0206، 768×int16 (°C×100).
     # init: أوامر تُرسَل للموديول لبدء البث (4Hz ثم تشغيل تلقائي).
     "thermal": {"port": "/dev/ttyAMA5", "baud": 115200,
@@ -103,6 +104,8 @@ def _export_sensor_constants():
     g["LIDAR_PWM_GPIO"] = SENSORS["lidar"]["pwm_gpio"]
     g["GPS_PORT"]       = SENSORS["gps"]["port"]
     g["GPS_BAUD"]       = SENSORS["gps"]["baud"]
+    g["GPS_FALLBACK_LAT"] = SENSORS["gps"]["lat"]
+    g["GPS_FALLBACK_LON"] = SENSORS["gps"]["lon"]
     g["THERMAL_PORT"]   = SENSORS["thermal"]["port"]
     g["THERMAL_BAUD"]   = SENSORS["thermal"]["baud"]
     g["SOIL_PORT"]      = SENSORS["soil"]["port"]

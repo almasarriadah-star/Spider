@@ -713,11 +713,14 @@ async function gpsStatus(){
   try{
     const d=await apiFetch('/api/gps/now');
     const chip=document.getElementById('chipGPS');
-    if(d.fix){
-      chip.textContent=`GPS 🟢${d.simulate?'(S)':''}`;
+    if(d.fix && !d.estimated){
+      chip.textContent='GPS 🟢 حقيقي';
       chip.className='status-chip chip-on';
+      chip.title=`${d.lat.toFixed(6)}, ${d.lon.toFixed(6)} | ${d.sats} قمر`;
     } else {
-      chip.textContent='GPS ⏳'; chip.className='status-chip chip-warn';
+      chip.textContent=d.simulate?'GPS 🟡 محاكاة':'GPS 🟡 تقديري';
+      chip.className='status-chip chip-warn';
+      chip.title='موقع تقديري — ضع الجهاز بمكان مكشوف السماء للحصول على fix';
     }
   }catch(e){}
 }

@@ -3,7 +3,7 @@
 
   "imu":     { "port": "/dev/serial0", "baud": 115200 },
   "lidar":   { "port": "/dev/ttyAMA3", "baud": 230400, "kind": "ld06", "pwm_gpio": 18 },
-  "gps":     { "port": "/dev/ttyAMA4", "baud": 9600 },
+  "gps":     { "port": "/dev/ttyAMA4", "baud": 9600, "lat": 34.068448, "lon": 36.746721 },
   "thermal": { "port": "/dev/ttyAMA5", "baud": 115200,
                "rows": 24, "cols": 32,
                "header": "5A5A0206", "encoding": "i16", "scale": 100.0,
