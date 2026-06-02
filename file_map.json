@@ -9,5 +9,9 @@
   "وثيقة Ripple Gait": "Sonnet/ripple_gait.md",
   "وثيقة التوازن والمشي السلس": "Sonnet/gimbal_balance_smooth_walking.md",
   "إعدادات التوازن PID": "balance_config.json",
-  "بيانات Ripple Gait": "ripple_gait_params.json"
+  "بيانات Ripple Gait": "ripple_gait_params.json",
+  "جامع عينات جغرافية": "spider/sensors/geo_sampler.py",
+  "صفحة الخريطة الحرارية": "templates/heatmap.html",
+  "بيانات العينات الجغرافية": "data/geo_samples.json",
+  "صفحة العرض الحراري FLIR": "templates/thermal_view.html"
 }

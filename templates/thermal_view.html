@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🕷️ عرض حراري — Spider</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',Tahoma,sans-serif;background:#000;color:#0f0;direction:rtl}
+.top{background:#111;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #333}
+.top h1{font-size:1.1rem;color:#0f0;text-shadow:0 0 8px #0f0}
+.top a{color:#888;text-decoration:none;font-size:.8rem;padding:3px 8px;border:1px solid #333;border-radius:4px}
+.top a:hover{color:#0f0;border-color:#0f0}
+.bar{background:#0a0a0a;padding:8px 16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;border-bottom:1px solid #222;font-size:.82rem}
+.bar label{color:#0a0}
+.bar select,.bar button,.bar input{background:#111;color:#0f0;border:1px solid #333;padding:4px 10px;border-radius:4px;font-size:.82rem;cursor:pointer;font-family:monospace}
+.bar select:focus,.bar button:hover{border-color:#0f0;box-shadow:0 0 6px #0f04}
+.bar button.rec{color:#f00;border-color:#f00;text-shadow:0 0 4px #f00}
+.bar button.rec.active{background:#f00;color:#fff;animation:blink 1s infinite}
+@keyframes blink{50%{opacity:.5}}
+.wrap{display:flex;height:calc(100vh - 85px)}
+.canvas-wrap{flex:1;position:relative;background:#000;overflow:hidden}
+canvas{display:block;width:100%;height:100%}
+.crosshair{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none}
+.crosshair::before,.crosshair::after{content:'';position:absolute;background:#fff5}
+.crosshair::before{width:30px;height:1px;top:0;left:-15px}
+.crosshair::after{width:1px;height:30px;top:-15px;left:0}
+.info-panel{width:280px;background:#0a0a0a;border-right:1px solid #222;padding:12px;overflow-y:auto;font-size:.8rem}
+.info-panel h3{color:#0f0;font-size:.9rem;margin-bottom:8px;border-bottom:1px solid #222;padding-bottom:4px}
+.stat-row{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #111}
+.stat-row .val{color:#0f0;font-family:monospace}
+.scale-bar{margin-top:12px;padding:8px;background:#111;border-radius:4px}
+.scale-bar .grad{height:14px;border-radius:3px;margin:6px 0 4px}
+.scale-labels{display:flex;justify-content:space-between;color:#888;font-size:.75rem}
+.minimap{position:absolute;bottom:10px;left:10px;width:160px;height:120px;background:#0008;border:1px solid #333;border-radius:4px;overflow:hidden}
+.minimap canvas{width:100%;height:100%}
+.timestamp{position:absolute;top:10px;right:10px;background:#000a;color:#0f0;font-family:monospace;font-size:.75rem;padding:4px 8px;border-radius:4px;border:1px solid #333}
+.robot-icon{position:absolute;color:#fff;font-size:18px;pointer-events:none;transform:translate(-50%,-50%);text-shadow:0 0 6px #fff;transition:all .3s}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <h1>🕷️ THERMAL VIEW</h1>
+  <div style="display:flex;gap:6px">
+    <a href="/">🏠</a>
+    <a href="/dashboard">📊</a>
+    <a href="/heatmap">🗺️</a>
+  </div>
+</div>
+
+<div class="bar">
+  <label>المقياس:</label>
+  <select id="metric">
+    <option value="soil_moisture">💧 رطوبة التربة %</option>
+    <option value="air_temp">🌡️ حرارة الجو °C</option>
+    <option value="air_humidity">💨 رطوبة الجو %</option>
+    <option value="gas_alarm">⚠️ غاز</option>
+    <option value="lidar_nearest">📏 أقرب عائق (مم)</option>
+    <option value="thermal_avg">🔥 حرارية °C</option>
+  </select>
+
+  <label>الشعاع:</label>
+  <input type="range" id="blobSize" min="20" max="120" value="60" style="width:70px">
+
+  <label>الحدة:</label>
+  <input type="range" id="sharpness" min="1" max="10" value="5" style="width:60px">
+
+  <button onclick="takeSample()">📍 عينة</button>
+  <button id="btnRec" class="rec" onclick="toggleRec()">⏺ REC</button>
+  <button onclick="clearAll()" style="color:#f44;border-color:#f44">🗑️</button>
+  <button onclick="loadData()">🔄</button>
+  <span id="lblCount" style="color:#888">0</span>
+</div>
+
+<div class="wrap">
+  <div class="canvas-wrap">
+    <canvas id="thermalCanvas"></canvas>
+    <div class="crosshair"></div>
+    <div class="timestamp" id="tsLabel">--:--:--</div>
+    <div class="minimap">
+      <canvas id="minimapCanvas"></canvas>
+    </div>
+  </div>
+
+  <div class="info-panel">
+    <h3>📊 الإحصائيات</h3>
+    <div id="statsPanel"></div>
+
+    <div class="scale-bar">
+      <div style="color:#888;font-size:.75rem" id="scaleTitle">رطوبة التربة %</div>
+      <div class="grad" id="scaleGrad"></div>
+      <div class="scale-labels">
+        <span id="scMin">-</span>
+        <span id="scMax">-</span>
+      </div>
+    </div>
+
+    <h3 style="margin-top:12px">🕷️ الروبوت</h3>
+    <div id="robotPanel">
+      <div class="stat-row"><span>الموقع</span><span class="val" id="rLatLon">--</span></div>
+      <div class="stat-row"><span>السرعة</span><span class="val" id="rSpeed">--</span></div>
+      <div class="stat-row"><span>الاتجاه</span><span class="val" id="rCourse">--</span></div>
+    </div>
+
+    <h3 style="margin-top:12px">📡 القراءات الحية</h3>
+    <div id="livePanel">
+      <div class="stat-row"><span>💧 تربة</span><span class="val" id="vSoil">--</span></div>
+      <div class="stat-row"><span>🌡️ جو</span><span class="val" id="vTemp">--</span></div>
+      <div class="stat-row"><span>💨 رطوبة</span><span class="val" id="vHum">--</span></div>
+      <div class="stat-row"><span>⚠️ غاز</span><span class="val" id="vGas">--</span></div>
+      <div class="stat-row"><span>📏 ليدار</span><span class="val" id="vLidar">--</span></div>
+      <div class="stat-row"><span>🔥 حرارية</span><span class="val" id="vThermal">--</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── ألوان حرارية FLIR ──
+const PALETTES = {
+  ironbow: [
+    [0, 0, 0],[20, 0, 80],[60, 0, 160],[100, 0, 200],
+    [160, 30, 180],[200, 80, 120],[230, 140, 50],[250, 200, 30],
+    [255, 240, 100],[255, 255, 220]
+  ],
+  rainbow: [
+    [0,0,180],[0,80,220],[0,180,255],[0,220,120],
+    [80,240,0],[200,240,0],[255,180,0],[255,80,0],[200,0,0],[140,0,0]
+  ],
+  whiteHot: [
+    [0,0,0],[40,40,40],[90,90,90],[140,140,140],
+    [180,180,180],[210,210,210],[240,240,240],[255,255,255]
+  ]
+};
+let currentPalette = 'ironbow';
+
+function getColor(t, pal) {
+  const p = PALETTES[pal || currentPalette];
+  t = Math.max(0, Math.min(1, t));
+  const idx = t * (p.length - 1);
+  const i = Math.floor(idx);
+  const f = idx - i;
+  if (i >= p.length - 1) return p[p.length - 1];
+  return [
+    Math.round(p[i][0] + (p[i+1][0] - p[i][0]) * f),
+    Math.round(p[i][1] + (p[i+1][1] - p[i][1]) * f),
+    Math.round(p[i][2] + (p[i+1][2] - p[i][2]) * f)
+  ];
+}
+
+// ── Canvas ──
+const canvas = document.getElementById('thermalCanvas');
+const ctx = canvas.getContext('2d');
+const mmCanvas = document.getElementById('minimapCanvas');
+const mmCtx = mmCanvas.getContext('2d');
+
+let samples = [];
+let ranges = {};
+let robotPos = null;
+let animId;
+
+function resize() {
+  const wrap = canvas.parentElement;
+  canvas.width = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+  mmCanvas.width = 160;
+  mmCanvas.height = 120;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── تنسيق الإحداثيات → بكسل ──
+function projectSamples() {
+  if (!samples.length) return [];
+  const w = canvas.width, h = canvas.height;
+  const pad = 60;
+  const lats = samples.map(s => s.lat);
+  const lons = samples.map(s => s.lon);
+  const mnLat = Math.min(...lats), mxLat = Math.max(...lats);
+  const mnLon = Math.min(...lons), mxLon = Math.max(...lons);
+  const dLat = (mxLat - mnLat) || 0.0001;
+  const dLon = (mxLon - mnLon) || 0.0001;
+  const scaleX = (w - pad * 2) / dLon;
+  const scaleY = (h - pad * 2) / dLat;
+  const sc = Math.min(scaleX, scaleY);
+
+  return samples.map(s => ({
+    x: pad + (s.lon - mnLon) * sc + (w - pad * 2 - dLon * sc) / 2,
+    y: h - pad - (s.lat - mnLat) * sc + (h - pad * 2 - dLat * sc) / 2,
+    ...s
+  }));
+}
+
+// ── الرسم ──
+function draw() {
+  const w = canvas.width, h = canvas.height;
+  const metric = document.getElementById('metric').value;
+  const blobR = parseInt(document.getElementById('blobSize').value);
+  const sharp = parseInt(document.getElementById('sharpness').value);
+
+  // خلفية سوداء
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+
+  if (!samples.length) {
+    ctx.fillStyle = '#333';
+    ctx.font = '16px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('لا توجد عينات — خذ عينة أو شغّل REC', w / 2, h / 2);
+    return;
+  }
+
+  const projected = projectSamples();
+  const rng = ranges[metric] || {};
+  const mn = rng.min, mx = rng.max;
+
+  // رسم البقع الحرارية
+  const step = Math.max(2, Math.round(12 - sharp));
+  for (let py = 0; py < h; py += step) {
+    for (let px = 0; px < w; px += step) {
+      let sumW = 0, sumV = 0;
+      for (const s of projected) {
+        const v = s[metric];
+        if (v == null) continue;
+        const dx = px - s.x, dy = py - s.y;
+        const d2 = dx * dx + dy * dy;
+        const r2 = blobR * blobR;
+        if (d2 > r2 * 4) continue;
+        const weight = Math.exp(-d2 / (2 * (blobR * 0.4) * (blobR * 0.4)));
+        sumW += weight;
+        sumV += weight * v;
+      }
+      if (sumW < 0.01) continue;
+      const avg = sumV / sumW;
+      const t = (mn != null && mx != null && mx !== mn) ? (avg - mn) / (mx - mn) : 0.5;
+      const c = getColor(t);
+      ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${Math.min(1, sumW * 2)})`;
+      ctx.fillRect(px, py, step, step);
+    }
+  }
+
+  // شبكة
+  ctx.strokeStyle = '#ffffff08';
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x < w; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+  for (let y = 0; y < h; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+
+  // نقاط العينات
+  for (const s of projected) {
+    const v = s[metric];
+    const t = (mn != null && mx != null && mx !== mn) ? (v - mn) / (mx - mn) : 0.5;
+    const c = getColor(t);
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+    ctx.fill();
+    ctx.strokeStyle = '#fff4';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+  }
+
+  // موقع الروبوت
+  if (robotPos && projected.length) {
+    const lats = samples.map(s => s.lat);
+    const lons = samples.map(s => s.lon);
+    const mnLat = Math.min(...lats), mxLat = Math.max(...lats);
+    const mnLon = Math.min(...lons), mxLon = Math.max(...lons);
+    const dLat = (mxLat - mnLat) || 0.0001;
+    const dLon = (mxLon - mnLon) || 0.0001;
+    const pad = 60;
+    const scaleX = (w - pad * 2) / dLon;
+    const scaleY = (h - pad * 2) / dLat;
+    const sc = Math.min(scaleX, scaleY);
+    const rx = pad + (robotPos.lon - mnLon) * sc + (w - pad * 2 - dLon * sc) / 2;
+    const ry = h - pad - (robotPos.lat - mnLat) * sc + (h - pad * 2 - dLat * sc) / 2;
+
+    // صليب
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(rx - 12, ry); ctx.lineTo(rx + 12, ry); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(rx, ry - 12); ctx.lineTo(rx, ry + 12); ctx.stroke();
+    ctx.beginPath(); ctx.arc(rx, ry, 8, 0, Math.PI * 2); ctx.stroke();
+    ctx.font = '12px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.fillText('🕷️', rx, ry - 14);
+  }
+
+  // minimap
+  drawMinimap(projected, metric, mn, mx);
+
+  // إحصائيات
+  updateStats(metric, mn, mx);
+  updateScale(metric, mn, mx);
+}
+
+function drawMinimap(projected, metric, mn, mx) {
+  const mw = mmCanvas.width, mh = mmCanvas.height;
+  mmCtx.fillStyle = '#111';
+  mmCtx.fillRect(0, 0, mw, mh);
+  if (!projected.length) return;
+
+  for (const s of projected) {
+    const v = s[metric];
+    const t = (mn != null && mx != null && mx !== mn) ? (v - mn) / (mx - mn) : 0.5;
+    const c = getColor(t);
+    const x = (s.x / canvas.width) * mw;
+    const y = (s.y / canvas.height) * mh;
+    mmCtx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+    mmCtx.fillRect(x - 2, y - 2, 4, 4);
+  }
+  mmCtx.strokeStyle = '#fff4';
+  mmCtx.strokeRect(0, 0, mw, mh);
+}
+
+function updateStats(metric, mn, mx) {
+  const panel = document.getElementById('statsPanel');
+  const vals = samples.map(s => s[metric]).filter(v => v != null);
+  if (!vals.length) { panel.innerHTML = '<div style="color:#888">لا بيانات</div>'; return; }
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  panel.innerHTML = `
+    <div class="stat-row"><span>📍 العينات</span><span class="val">${samples.length}</span></div>
+    <div class="stat-row"><span>📉 الأدنى</span><span class="val">${mn ?? '-'}</span></div>
+    <div class="stat-row"><span>📈 الأعلى</span><span class="val">${mx ?? '-'}</span></div>
+    <div class="stat-row"><span>📊 المتوسط</span><span class="val">${avg.toFixed(1)}</span></div>
+    <div class="stat-row"><span>📐 المدى</span><span class="val">${mx != null && mn != null ? (mx - mn).toFixed(1) : '-'}</span></div>
+  `;
+}
+
+function updateScale(metric, mn, mx) {
+  const titles = {
+    soil_moisture: 'رطوبة التربة %', air_temp: 'حرارة الجو °C',
+    air_humidity: 'رطوبة الجو %', gas_alarm: 'إنذار غاز',
+    lidar_nearest: 'أقرب عائق (مم)', thermal_avg: 'حرارة حرارية °C'
+  };
+  document.getElementById('scaleTitle').textContent = titles[metric] || metric;
+  document.getElementById('scMin').textContent = mn != null ? mn : '-';
+  document.getElementById('scMax').textContent = mx != null ? mx : '-';
+  // gradient bar
+  const grad = document.getElementById('scaleGrad');
+  const p = PALETTES[currentPalette];
+  const stops = p.map((c, i) => `rgb(${c[0]},${c[1]},${c[2]}) ${(i / (p.length - 1) * 100).toFixed(0)}%`).join(',');
+  grad.style.background = `linear-gradient(to left, ${stops})`;
+}
+
+// ── البيانات ──
+async function loadData() {
+  try {
+    const r = await fetch('/api/v1/geo/heatmap');
+    const d = await r.json();
+    samples = d.samples || [];
+    ranges = d.ranges || {};
+    document.getElementById('lblCount').textContent = samples.length;
+  } catch (e) { console.error(e); }
+  draw();
+}
+
+async function updateLive() {
+  try {
+    const r = await fetch('/api/v1/readings');
+    const d = await r.json();
+    // GPS
+    if (d.gps) {
+      robotPos = { lat: d.gps.lat, lon: d.gps.lon };
+      document.getElementById('rLatLon').textContent = `${d.gps.lat.toFixed(5)}, ${d.gps.lon.toFixed(5)}`;
+      document.getElementById('rSpeed').textContent = `${(d.gps.speed || 0).toFixed(1)} م/ث`;
+      document.getElementById('rCourse').textContent = `${(d.gps.course || 0).toFixed(0)}°`;
+    }
+    // Sensors
+    if (d.soil) document.getElementById('vSoil').textContent = `${d.soil.moisture_pct ?? '-'}%`;
+    if (d.environment) {
+      document.getElementById('vTemp').textContent = `${d.environment.air_temp_c ?? '-'}°C`;
+      document.getElementById('vHum').textContent = `${d.environment.air_humidity_pct ?? '-'}%`;
+      document.getElementById('vGas').textContent = d.environment.gas_alarm ? '🔴 نعم' : '🟢 لا';
+    }
+    if (d.lidar) document.getElementById('vLidar').textContent = `${d.lidar.nearest_mm ?? '-'} مم`;
+    if (d.thermal) document.getElementById('vThermal').textContent = `${d.thermal.avg_c ?? '-'}°C`;
+    // Timestamp
+    document.getElementById('tsLabel').textContent = new Date().toLocaleTimeString('ar');
+  } catch (e) {}
+}
+
+// ── أزرار ──
+async function takeSample() {
+  await fetch('/api/v1/geo/sample', {method: 'POST'});
+  loadData();
+}
+
+async function toggleRec() {
+  const btn = document.getElementById('btnRec');
+  const on = btn.classList.toggle('active');
+  await fetch('/api/v1/geo/auto/' + (on ? 'on' : 'off'), {method: 'POST'});
+  btn.textContent = on ? '⏹ STOP' : '⏺ REC';
+}
+
+async function clearAll() {
+  if (!confirm('مسح كل العينات؟')) return;
+  await fetch('/api/v1/geo/clear', {method: 'POST'});
+  loadData();
+}
+
+// ── تغيير المقياس ──
+document.getElementById('metric').onchange = () => draw();
+document.getElementById('blobSize').oninput = () => draw();
+document.getElementById('sharpness').oninput = () => draw();
+
+// ── حلقة الرسم ──
+loadData();
+updateLive();
+setInterval(loadData, 3000);
+setInterval(updateLive, 2000);
+</script>
+</body>
+</html>

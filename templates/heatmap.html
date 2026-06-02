@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🕷️ خريطة حرارية — Spider</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',Tahoma,sans-serif;background:#0d1117;color:#e6edf3;direction:rtl}
+.header{background:#161b22;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #30363d}
+.header h1{font-size:1.3rem;color:#58a6ff}
+.header a{color:#8b949e;text-decoration:none;font-size:.85rem;padding:4px 10px;border:1px solid #30363d;border-radius:6px}
+.header a:hover{color:#58a6ff;border-color:#58a6ff}
+.controls{background:#161b22;padding:12px 20px;display:flex;gap:12px;flex-wrap:wrap;align-items:center;border-bottom:1px solid #30363d}
+.controls label{font-size:.85rem;color:#8b949e}
+.controls select,.controls button,.controls input{background:#0d1117;color:#e6edf3;border:1px solid #30363d;padding:6px 12px;border-radius:6px;font-size:.85rem}
+.controls button{cursor:pointer;transition:all .2s}
+.controls button:hover{border-color:#58a6ff;color:#58a6ff}
+.controls button.active{background:#238636;border-color:#238636;color:#fff}
+.controls button.danger{border-color:#da3633;color:#da3633}
+.controls button.danger:hover{background:#da3633;color:#fff}
+#map{width:100%;height:calc(100vh - 110px)}
+.stats{background:#161b22;padding:8px 20px;border-top:1px solid #30363d;display:flex;gap:20px;font-size:.8rem;color:#8b949e}
+.stats span{color:#58a6ff;font-weight:600}
+.legend{position:absolute;bottom:50px;left:20px;z-index:1000;background:rgba(22,27,34,.92);border:1px solid #30363d;border-radius:8px;padding:10px 14px;font-size:.78rem;min-width:160px}
+.legend h4{color:#58a6ff;margin-bottom:6px;font-size:.82rem}
+.legend-bar{height:12px;border-radius:6px;margin:6px 0 4px}
+.legend-labels{display:flex;justify-content:space-between;color:#8b949e}
+.popup-info{direction:rtl;text-align:right;font-size:.82rem;line-height:1.7}
+.popup-info b{color:#58a6ff}
+@media(max-width:600px){.controls{gap:6px}.header h1{font-size:1rem}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🕷️ خريطة حرارية</h1>
+  <div style="display:flex;gap:8px">
+    <a href="/">🏠 الرئيسية</a>
+    <a href="/dashboard">📊 الداشبورد</a>
+    <a href="/map">🗺️ الخريطة</a>
+  </div>
+</div>
+
+<div class="controls">
+  <label>المقياس:</label>
+  <select id="metric" onchange="redraw()">
+    <option value="soil_moisture">💧 رطوبة التربة %</option>
+    <option value="air_temp">🌡️ حرارة الجو °C</option>
+    <option value="air_humidity">💨 رطوبة الجو %</option>
+    <option value="gas_alarm">⚠️ إنذار غاز</option>
+    <option value="lidar_nearest">📏 أقرب عائق (مم)</option>
+    <option value="thermal_avg">🔥 حرارة حرارية °C</option>
+  </select>
+
+  <label>نصف القطر:</label>
+  <input id="radius" type="range" min="5" max="50" value="20" onchange="redraw()" style="width:80px">
+  <span id="radiusVal" style="font-size:.8rem;color:#8b949e">20</span>
+
+  <button id="btnAuto" onclick="toggleAuto()">⏺️ أخذ تلقائي</button>
+  <button onclick="takeSample()">📍 أخذ عينة</button>
+  <button class="danger" onclick="clearSamples()">🗑️ مسح</button>
+  <button onclick="loadData()">🔄 تحديث</button>
+  <span id="countLabel" style="font-size:.8rem;color:#8b949e">0 عينة</span>
+</div>
+
+<div id="map"></div>
+
+<div class="legend" id="legend" style="display:none">
+  <h4 id="legendTitle"></h4>
+  <div class="legend-bar" id="legendBar"></div>
+  <div class="legend-labels">
+    <span id="legMin">-</span>
+    <span id="legMax">-</span>
+  </div>
+</div>
+
+<script>
+// ── الخريطة ──
+const DEFAULT_LAT = 31.9539, DEFAULT_LON = 35.9106;
+const map = L.map('map').setView([DEFAULT_LAT, DEFAULT_LON], 17);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap', maxZoom: 19
+}).addTo(map);
+
+let heatLayer = null;
+let markers = [];
+let samples = [];
+let ranges = {};
+
+const COLORS = {
+  soil_moisture: {lo:'#8B4513', hi:'#00BFFF', label:'رطوبة التربة %'},
+  air_temp:      {lo:'#0040FF', hi:'#FF2020', label:'حرارة الجو °C'},
+  air_humidity:  {lo:'#FFD700', hi:'#006400', label:'رطوبة الجو %'},
+  gas_alarm:     {lo:'#00C853', hi:'#FF1744', label:'إنذار غاز'},
+  lidar_nearest: {lo:'#FF0000', hi:'#00FF00', label:'أقرب عائق (مم)'},
+  thermal_avg:   {lo:'#0000FF', hi:'#FF0000', label:'حرارة حرارية °C'},
+};
+
+// ── تحميل البيانات ──
+async function loadData() {
+  try {
+    const r = await fetch('/api/v1/geo/heatmap');
+    const d = await r.json();
+    samples = d.samples || [];
+    ranges = d.ranges || {};
+    document.getElementById('countLabel').textContent = samples.length + ' عينة';
+    if (d.bounds) {
+      map.fitBounds([[d.bounds.min_lat, d.bounds.min_lon],
+                     [d.bounds.max_lat, d.bounds.max_lon]], {padding:[40,40]});
+    }
+    redraw();
+  } catch(e) { console.error(e); }
+}
+
+// ── تلوين ──
+function valTo01(val, mn, mx) {
+  if (mn == null || mx == null || mn === mx) return 0.5;
+  return Math.max(0, Math.min(1, (val - mn) / (mx - mn)));
+}
+
+function lerpColor(a, b, t) {
+  const ah = parseInt(a.replace('#',''), 16);
+  const bh = parseInt(b.replace('#',''), 16);
+  const ar = (ah >> 16) & 0xff, ag = (ah >> 8) & 0xff, ab2 = ah & 0xff;
+  const br = (bh >> 16) & 0xff, bg = (bh >> 8) & 0xff, bb = bh & 0xff;
+  const rr = Math.round(ar + (br - ar) * t);
+  const rg = Math.round(ag + (bg - ag) * t);
+  const rb = Math.round(ab2 + (bb - ab2) * t);
+  return `rgb(${rr},${rg},${rb})`;
+}
+
+// ── رسم ──
+function redraw() {
+  const metric = document.getElementById('metric').value;
+  const radius = parseInt(document.getElementById('radius').value);
+  document.getElementById('radiusVal').textContent = radius;
+
+  // مسح القديم
+  if (heatLayer) map.removeLayer(heatLayer);
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+
+  if (!samples.length) {
+    document.getElementById('legend').style.display = 'none';
+    return;
+  }
+
+  const c = COLORS[metric];
+  const rng = ranges[metric] || {};
+  const mn = rng.min, mx = rng.max;
+
+  // بيانات الخريطة الحرارية
+  const heatData = [];
+  samples.forEach(s => {
+    const v = s[metric];
+    if (v == null) return;
+    const intensity = valTo01(v, mn, mx);
+    heatData.push([s.lat, s.lon, intensity]);
+  });
+
+  heatLayer = L.heatLayer(heatData, {
+    radius: radius, blur: radius * 0.7,
+    maxZoom: 19, max: 1.0, minOpacity: 0.3,
+    gradient: {0: c.lo, 0.5: lerpColor(c.lo, c.hi, 0.5), 1: c.hi}
+  }).addTo(map);
+
+  // علامات مع نافذة معلومات
+  samples.forEach((s, i) => {
+    const v = s[metric];
+    if (v == null) return;
+    const t = valTo01(v, mn, mx);
+    const color = lerpColor(c.lo, c.hi, t);
+    const marker = L.circleMarker([s.lat, s.lon], {
+      radius: 5, fillColor: color, fillOpacity: 0.7,
+      color: '#fff', weight: 1
+    }).addTo(map);
+
+    const time = new Date(s.ts * 1000).toLocaleTimeString('ar');
+    marker.bindPopup(`
+      <div class="popup-info">
+        <b>📍</b> ${s.lat.toFixed(6)}, ${s.lon.toFixed(6)}<br>
+        <b>💧 رطوبة التربة:</b> ${s.soil_moisture ?? '-'}%<br>
+        <b>🌡️ حرارة الجو:</b> ${s.air_temp ?? '-'}°C<br>
+        <b>💨 رطوبة الجو:</b> ${s.air_humidity ?? '-'}%<br>
+        <b>⚠️ إنذار غاز:</b> ${s.gas_alarm ? '🔴 نعم' : '🟢 لا'}<br>
+        <b>📏 أقرب عائق:</b> ${s.lidar_nearest ?? '-'} مم<br>
+        <b>🔥 حرارة حرارية:</b> ${s.thermal_avg ?? '-'}°C<br>
+        <b>🕐 الوقت:</b> ${time}
+      </div>
+    `);
+    markers.push(marker);
+  });
+
+  // الأسطورة
+  const legend = document.getElementById('legend');
+  legend.style.display = 'block';
+  document.getElementById('legendTitle').textContent = c.label;
+  const bar = document.getElementById('legendBar');
+  bar.style.background = `linear-gradient(to left, ${c.lo}, ${c.hi})`;
+  document.getElementById('legMin').textContent = mn != null ? mn : '-';
+  document.getElementById('legMax').textContent = mx != null ? mx : '-';
+}
+
+// ── أزرار ──
+async function takeSample() {
+  const r = await fetch('/api/v1/geo/sample', {method:'POST'});
+  const d = await r.json();
+  if (d.ok) {
+    loadData();
+  } else {
+    alert('خطأ: ' + (d.error || 'غير معروف'));
+  }
+}
+
+async function clearSamples() {
+  if (!confirm('هل أنت متأكد من مسح كل العينات؟')) return;
+  await fetch('/api/v1/geo/clear', {method:'POST'});
+  loadData();
+}
+
+async function toggleAuto() {
+  const btn = document.getElementById('btnAuto');
+  const newState = btn.classList.contains('active') ? 'off' : 'on';
+  const r = await fetch('/api/v1/geo/auto/' + newState, {method:'POST'});
+  const d = await r.json();
+  if (d.ok) {
+    btn.classList.toggle('active', d.auto);
+    btn.textContent = d.auto ? '⏹️ إيقاف تلقائي' : '⏺️ أخذ تلقائي';
+  }
+}
+
+// تحديث تلقائي كل 3 ثواني
+setInterval(loadData, 3000);
+
+// أول تحميل
+loadData();
+
+// تتبع موقع الروبوت الحالي
+let robotMarker = null;
+async function updateRobotPos() {
+  try {
+    const r = await fetch('/api/v1/gps');
+    const g = await r.json();
+    if (g.lat && g.lon) {
+      if (!robotMarker) {
+        robotMarker = L.marker([g.lat, g.lon], {
+          icon: L.divIcon({className:'', html:'<div style="font-size:24px">🕷️</div>', iconSize:[30,30], iconAnchor:[15,15]})
+        }).addTo(map);
+      } else {
+        robotMarker.setLatLng([g.lat, g.lon]);
+      }
+    }
+  } catch(e) {}
+}
+setInterval(updateRobotPos, 2000);
+updateRobotPos();
+</script>
+</body>
+</html>

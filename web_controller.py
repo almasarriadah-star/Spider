@@ -1814,6 +1814,110 @@ def v1_config():
 
 
 # ════════════════════════════════════════════════════════════════
+# ── خريطة حرارية جغرافية (GeoSampler) ──
+# ════════════════════════════════════════════════════════════════
+from spider.sensors.geo_sampler import sampler as _geo_sampler
+
+
+def _get_sensor_readings():
+    """يجمع قراءات كل الحساسات دفعة واحدة."""
+    air = _dht22.read()
+    scan = _lidar.get_scan()
+    vals = [v for v in scan.values() if v]
+    lidar_nearest = round(min(vals)) if vals else None
+    tm = _thermal_cam.read_matrix()
+    thermal_avg = round(float(tm.mean()), 1) if tm is not None else None
+    return {
+        "soil": _soil.read_percent(),
+        "air_temp": air["temp"],
+        "air_humidity": air["humidity"],
+        "gas_alarm": _gas.alarm(),
+        "lidar_nearest": lidar_nearest,
+        "thermal_avg": thermal_avg,
+    }
+
+
+# بدء أخذ العينات التلقائي
+_geo_sampler.start_auto(lambda: _gps.data, _get_sensor_readings)
+
+
+@app.route("/api/v1/geo/sample", methods=["POST"])
+def v1_geo_sample():
+    """أخذ عينة يدوية الآن."""
+    r = _get_sensor_readings()
+    s = _geo_sampler.take(_gps.data, r["soil"], r["air_temp"],
+                          r["air_humidity"], r["gas_alarm"],
+                          r["lidar_nearest"], r["thermal_avg"])
+    if s is None:
+        return jsonify({"ok": False, "error": "no gps fix"}), 400
+    return jsonify({"ok": True, "sample": s})
+
+
+@app.route("/api/v1/geo/samples")
+def v1_geo_samples():
+    """يرجع كل العينات المسجّلة."""
+    return jsonify({"ok": True, "count": len(_geo_sampler.samples),
+                    "samples": _geo_sampler.get_all()})
+
+
+@app.route("/api/v1/geo/heatmap")
+def v1_geo_heatmap():
+    """يرجع بيانات الخريطة الحرارية مع min/max لكل مقياس."""
+    samples = _geo_sampler.get_all()
+    if not samples:
+        return jsonify({"ok": True, "count": 0, "samples": [],
+                        "bounds": None, "ranges": {}})
+
+    # حساب حدود لكل مقياس (لتلوين الخريطة)
+    metrics = {}
+    for key in ["soil_moisture", "air_temp", "air_humidity",
+                "lidar_nearest", "thermal_avg"]:
+        vals = [s[key] for s in samples if s.get(key) is not None]
+        if vals:
+            metrics[key] = {"min": round(min(vals), 1), "max": round(max(vals), 1)}
+
+    return jsonify({
+        "ok": True, "count": len(samples),
+        "samples": samples,
+        "bounds": _geo_sampler.get_bounds(),
+        "ranges": metrics,
+    })
+
+
+@app.route("/api/v1/geo/clear", methods=["POST"])
+def v1_geo_clear():
+    """مسح كل العينات."""
+    _geo_sampler.clear()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/v1/geo/auto/<state>", methods=["POST"])
+def v1_geo_auto(state):
+    """تشغيل/إيقاف أخذ العينات التلقائي."""
+    _geo_sampler.auto = (state == "on")
+    return jsonify({"ok": True, "auto": _geo_sampler.auto})
+
+
+@app.route("/api/v1/geo/auto/dist", methods=["POST"])
+def v1_geo_auto_dist():
+    """ضبط مسافة أقل ما بين عينتين (متر)."""
+    d = request.json or {}
+    dist = float(d.get("dist", 0.5))
+    _geo_sampler.min_dist_m = max(0.1, dist)
+    return jsonify({"ok": True, "min_dist_m": _geo_sampler.min_dist_m})
+
+
+@app.route("/heatmap")
+def heatmap_page():
+    return render_template("heatmap.html")
+
+
+@app.route("/thermal-view")
+def thermal_view_page():
+    return render_template("thermal_view.html")
+
+
+# ════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print(f"Hardware: {'CONNECTED' if HARDWARE else 'SIMULATION MODE'}")
     print(f"IMU (BNO085): {'READY' if BNO_READY else 'NOT FOUND'}")
