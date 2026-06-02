@@ -49,7 +49,8 @@ class GeoSampler:
 
     # ── أخذ عينة يدوية ──
     def take(self, gps_data, soil_pct, air_temp, air_humidity, gas_alarm,
-             lidar_nearest=None, thermal_avg=None):
+             lidar_nearest=None, thermal_avg=None,
+             soil_salinity=None, soil_temp=None):
         """يسجّل عينة واحدة ويرجعها."""
         if not gps_data.get("fix"):
             return None
@@ -58,6 +59,8 @@ class GeoSampler:
             "lon": round(gps_data["lon"], 7),
             "ts": time.time(),
             "soil_moisture": soil_pct,
+            "soil_salinity": soil_salinity,   # EC (الملوحة)
+            "soil_temp": soil_temp,           # حرارة التربة °C
             "air_temp": air_temp,
             "air_humidity": air_humidity,
             "gas_alarm": gas_alarm,
@@ -108,7 +111,8 @@ class GeoSampler:
                         r = get_readings()
                         self.take(g, r["soil"], r["air_temp"],
                                   r["air_humidity"], r["gas_alarm"],
-                                  r.get("lidar_nearest"), r.get("thermal_avg"))
+                                  r.get("lidar_nearest"), r.get("thermal_avg"),
+                                  r.get("soil_salinity"), r.get("soil_temp"))
             time.sleep(0.5)
 
     def start_auto(self, get_gps, get_readings):

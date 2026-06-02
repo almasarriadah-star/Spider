@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🌱 تحليل التربة</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0d0d0f; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; }
+.bar {
+  display: flex; gap: 8px; align-items: center; padding: 8px 12px;
+  background: #131318; border-bottom: 1px solid #222; flex-wrap: wrap;
+}
+.bar h2 { color: #3fb950; font-size: 15px; margin-left: auto; }
+.bar a { color: #58a6ff; font-size: 12px; text-decoration: none; }
+.btn {
+  padding: 7px 14px; border: none; border-radius: 8px; cursor: pointer;
+  font-weight: 700; font-size: 13px; transition: opacity .12s;
+}
+.btn:active { opacity: .7; }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn-green { background: #0a5c2e; color: #3fb950; border: 1px solid #1a8a44; }
+.btn-blue  { background: #0a1a5c; color: #58a6ff; border: 1px solid #1a3a8a; }
+.btn-gray  { background: #1a1a1a; color: #888;    border: 1px solid #333; }
+.btn-red   { background: #5c0a0a; color: #f85149; border: 1px solid #8a1a1a; }
+.wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; }
+@media (max-width: 800px) { .wrap { grid-template-columns: 1fr; } }
+.panel { background: #131318; border: 1px solid #222; border-radius: 12px; padding: 14px; }
+.panel h3 { font-size: 13px; color: #8b949e; margin-bottom: 10px; font-weight: 700; }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.card { background: #0d0d0f; border: 1px solid #222; border-radius: 10px; padding: 14px; text-align: center; }
+.card .v { font-size: 26px; font-weight: 800; }
+.card .u { font-size: 11px; color: #666; }
+.card .l { font-size: 12px; color: #8b949e; margin-bottom: 6px; }
+.c-moist .v { color: #58a6ff; }
+.c-salt .v  { color: #d29922; }
+.c-temp .v  { color: #f85149; }
+#status { font-size: 11px; color: #666; margin-top: 10px; }
+.measure { width: 100%; font-size: 16px; padding: 14px; margin-top: 4px; }
+.servo-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.servo-row label { font-size: 12px; color: #8b949e; min-width: 70px; }
+input[type=range] { flex: 1; }
+#map { height: 320px; border-radius: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th, td { padding: 6px 8px; border-bottom: 1px solid #222; text-align: center; }
+th { color: #8b949e; font-weight: 700; position: sticky; top: 0; background: #131318; }
+.tbl-wrap { max-height: 320px; overflow: auto; }
+.poiLbl { background: transparent !important; border: none !important; box-shadow: none !important;
+          color: #fff; font-size: 11px; text-shadow: 0 0 4px #000; }
+#measResult { font-size: 12px; margin-top: 8px; min-height: 16px; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <button class="btn btn-green measure" style="width:auto" onclick="measurePoint()" id="measBtn">📍 قياس نقطة</button>
+  <button class="btn btn-blue" onclick="refreshLog()">🔄 تحديث السجل</button>
+  <button class="btn btn-red"  onclick="clearLog()">🗑️ مسح السجل</button>
+  <a href="/map">🗺️ الخريطة الكاملة</a>
+  <a href="/">🏠 الداشبورد</a>
+  <h2>🌱 تحليل التربة</h2>
+</div>
+
+<div class="wrap">
+  <!-- القراءات الحيّة + القياس -->
+  <div class="panel">
+    <h3>قراءات حيّة</h3>
+    <div class="cards">
+      <div class="card c-moist"><div class="l">💧 الرطوبة</div><div class="v" id="vMoist">--</div><div class="u">%</div></div>
+      <div class="card c-salt"><div class="l">🧂 الملوحة (EC)</div><div class="v" id="vSalt">--</div><div class="u" id="uSalt">µS/cm</div></div>
+      <div class="card c-temp"><div class="l">🌡️ الحرارة</div><div class="v" id="vTemp">--</div><div class="u">°C</div></div>
+    </div>
+    <div id="status">جاري التحميل…</div>
+    <div id="measResult"></div>
+  </div>
+
+  <!-- إعدادات/اختبار السيرفو -->
+  <div class="panel">
+    <h3>اختبار السيرفوات المساعدة</h3>
+    <div class="servo-row">
+      <label>حساس التربة</label>
+      <button class="btn btn-gray" onclick="auxDeploy()">⬇️ إنزال</button>
+      <button class="btn btn-gray" onclick="auxRetract()">⬆️ رفع</button>
+      <span id="soilAngle" style="font-size:12px;color:#666"></span>
+    </div>
+    <div class="servo-row">
+      <label>الكاميرا</label>
+      <input type="range" min="0" max="180" value="90" id="camSlider"
+             oninput="camMove(this.value)">
+      <span id="camAngle" style="font-size:12px;color:#666">90°</span>
+    </div>
+    <p style="font-size:11px;color:#666;margin-top:8px">
+      زوايا الرفع/الإنزال وقطبية السيرفوات تُضبط من <code>config/sensors.json → aux_servo</code>.
+    </p>
+  </div>
+
+  <!-- الخريطة المصغّرة -->
+  <div class="panel">
+    <h3>خريطة نقاط التربة</h3>
+    <div id="map"></div>
+  </div>
+
+  <!-- سجل النقاط -->
+  <div class="panel">
+    <h3>سجل النقاط (<span id="logCount">0</span>)</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>الوقت</th><th>💧%</th><th>🧂 EC</th><th>🌡️°C</th><th>الإحداثيات</th></tr></thead>
+        <tbody id="logBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const DEF_LAT = 34.068448, DEF_LON = 36.746721;
+const map = L.map('map').setView([DEF_LAT, DEF_LON], 18);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  { maxZoom: 22, attribution: '© OpenStreetMap' }).addTo(map);
+const robotMarker = L.marker([DEF_LAT, DEF_LON]).addTo(map).bindPopup('🕷️ الروبوت');
+const soilLayer = L.layerGroup().addTo(map);
+
+function soilIcon() {
+  return L.divIcon({ html: '<div style="font-size:20px;filter:drop-shadow(0 0 3px #58a6ff)">💧</div>',
+                     className: '', iconAnchor: [10, 20] });
+}
+
+// ── القراءات الحيّة ──
+async function pollSoil() {
+  try {
+    const d = await (await fetch('/api/v1/soil')).json();
+    document.getElementById('vMoist').textContent = d.moisture_pct ?? '--';
+    document.getElementById('vSalt').textContent  = d.salinity ?? '--';
+    document.getElementById('vTemp').textContent  = d.temp_c ?? '--';
+    document.getElementById('uSalt').textContent  = d.ec_unit || 'µS/cm';
+    const el = document.getElementById('status');
+    el.textContent = d.simulate ? '🟡 وضع المحاكاة (لا حساس متصل)'
+                                : '🟢 حساس Modbus متصل' + (d.ready ? '' : ' — بانتظار أول قراءة');
+    el.style.color = d.simulate ? '#d29922' : '#3fb950';
+  } catch (e) { document.getElementById('status').textContent = '⚠️ خطأ اتصال'; }
+}
+
+// ── قياس نقطة ──
+async function measurePoint() {
+  const btn = document.getElementById('measBtn');
+  const out = document.getElementById('measResult');
+  btn.disabled = true; btn.textContent = '⏳ جاري القياس…';
+  out.textContent = 'الروبوت ينزل ويُنزل الحساس…';
+  try {
+    const r = await (await fetch('/api/v1/soil/measure_point', { method: 'POST' })).json();
+    if (r.ok) {
+      const rd = r.reading;
+      out.innerHTML = `✅ رطوبة ${rd.moisture_pct}% · ملوحة ${rd.salinity} · حرارة ${rd.temp_c}°C` +
+        (r.mapped ? ' — 📍 ثُبّتت على الخريطة' : ' — ⚠️ بلا fix، لم تُثبَّت');
+      out.style.color = '#3fb950';
+      refreshLog();
+    } else {
+      out.textContent = '❌ ' + (r.error || 'فشل القياس'); out.style.color = '#f85149';
+    }
+  } catch (e) { out.textContent = '❌ خطأ اتصال'; out.style.color = '#f85149'; }
+  btn.disabled = false; btn.textContent = '📍 قياس نقطة';
+}
+
+// ── السيرفوات ──
+async function auxPost(payload) {
+  await fetch('/api/v1/aux_servo', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  refreshAux();
+}
+// إنزال/رفع التربة يستخدمان زوايا الإعداد (lower_angle/raise_angle) عبر action.
+function auxDeploy()  { auxPost({ action: 'deploy'  }); }
+function auxRetract() { auxPost({ action: 'retract' }); }
+async function auxSet(which, angle) { return auxPost({ which, angle }); }
+async function camMove(v) {
+  document.getElementById('camAngle').textContent = v + '°';
+  await auxSet('camera', v);
+}
+async function refreshAux() {
+  try {
+    const d = await (await fetch('/api/v1/aux_servo')).json();
+    if (d.state) {
+      document.getElementById('soilAngle').textContent = 'الزاوية: ' + d.state.soil + '°';
+      const cam = d.state.camera;
+      document.getElementById('camAngle').textContent = cam + '°';
+      document.getElementById('camSlider').value = cam;
+    }
+  } catch (e) {}
+}
+
+// ── السجل + الخريطة ──
+async function refreshLog() {
+  try {
+    const d = await (await fetch('/api/v1/geo/samples')).json();
+    const rows = (d.samples || []).slice().reverse();
+    document.getElementById('logCount').textContent = rows.length;
+    const body = document.getElementById('logBody');
+    body.innerHTML = '';
+    soilLayer.clearLayers();
+    for (const s of rows) {
+      const t = new Date((s.ts || 0) * 1000).toLocaleTimeString('ar');
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${t}</td><td>${s.soil_moisture ?? '--'}</td>` +
+        `<td>${s.soil_salinity ?? '--'}</td><td>${s.soil_temp ?? '--'}</td>` +
+        `<td>${s.lat?.toFixed(5)}, ${s.lon?.toFixed(5)}</td>`;
+      body.appendChild(tr);
+      if (s.lat && s.lon) {
+        L.marker([s.lat, s.lon], { icon: soilIcon() }).addTo(soilLayer)
+          .bindTooltip(`💧 ${s.soil_moisture ?? '--'}% · 🧂 ${s.soil_salinity ?? '--'} · 🌡️ ${s.soil_temp ?? '--'}°`,
+                       { permanent: false, direction: 'top', className: 'poiLbl' });
+      }
+    }
+  } catch (e) { console.error(e); }
+}
+
+async function clearLog() {
+  if (!confirm('مسح كل سجلّ عينات التربة؟')) return;
+  await fetch('/api/v1/geo/clear', { method: 'POST' });
+  refreshLog();
+}
+
+// ── موقع الروبوت الحيّ ──
+const es = new EventSource('/api/stream');
+es.onmessage = e => {
+  try {
+    const d = JSON.parse(e.data);
+    if (d.gps) {
+      const ll = [d.gps.lat, d.gps.lon];
+      robotMarker.setLatLng(ll);
+      if (d.gps.fix && !d.gps.estimated && !map._centered) { map.setView(ll, 18); map._centered = true; }
+    }
+  } catch (err) {}
+};
+
+pollSoil(); refreshAux(); refreshLog();
+setInterval(pollSoil, 1000);
+setInterval(refreshLog, 8000);
+</script>
+</body>
+</html>

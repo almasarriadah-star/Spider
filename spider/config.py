@@ -61,10 +61,21 @@ SENSORS_DEFAULT = {
                 "rows": 24, "cols": 32,
                 "header": "5A5A0206", "encoding": "i16", "scale": 100.0,
                 "init": ["A52501CB", "A53502DC"]},
-    "soil":    {"port": "/dev/ttyUSB0", "baud": 9600, "dry_raw": 26000, "wet_raw": 11000},
+    # حساس تربة صناعي Modbus RTU (USB→RS485, minimalmodbus). المكتشَف: slave 1 @4800.
+    # registers=أرقام السجلات، scales=معامل الضرب (رطوبة/حرارة ÷10، EC خام). الملوحة = EC.
+    "soil":    {"port": "/dev/ttyUSB0", "slave_id": 1, "baud": 4800,
+                "registers": {"moisture": 0, "temp": 1, "ec": 2},
+                "scales":    {"moisture": 0.1, "temp": 0.1, "ec": 1.0},
+                "ec_unit": "uS/cm", "poll_s": 1.0},
     "gas":     {"gpio": 6, "active_low": True},
     "dht22":   {"gpio": 16},
-    "aux_servo": {"camera_key": "R9", "soil_key": "L9", "min": 0, "max": 180},
+    # سيرفوان مساعدان مع قطبية وزوايا رفع/إنزال + تسلسل قياس النقطة.
+    "aux_servo": {"min": 0, "max": 180,
+                  "camera": {"key": "R9", "invert": False, "home": 90},
+                  "soil":   {"key": "L9", "invert": False,
+                             "raise_angle": 90, "lower_angle": 20},
+                  "measure": {"body_descend": True, "body_move": "body_down",
+                              "body_speed": 0.6, "descend_s": 1.2, "settle_s": 1.5}},
     "server":  {"host": "0.0.0.0", "port": 5000},
 }
 
@@ -110,15 +121,15 @@ def _export_sensor_constants():
     g["THERMAL_BAUD"]   = SENSORS["thermal"]["baud"]
     g["SOIL_PORT"]      = SENSORS["soil"]["port"]
     g["SOIL_BAUD"]      = SENSORS["soil"]["baud"]
-    g["SOIL_DRY_RAW"]   = SENSORS["soil"]["dry_raw"]
-    g["SOIL_WET_RAW"]   = SENSORS["soil"]["wet_raw"]
+    g["SOIL_SLAVE_ID"]  = SENSORS["soil"]["slave_id"]
     g["GAS_DO_GPIO"]    = SENSORS["gas"]["gpio"]
     g["GAS_ACTIVE_LOW"] = SENSORS["gas"]["active_low"]
     g["DHT22_GPIO"]     = SENSORS["dht22"]["gpio"]
-    g["CAM_SERVO_KEY"]  = SENSORS["aux_servo"]["camera_key"]
-    g["SOIL_SERVO_KEY"] = SENSORS["aux_servo"]["soil_key"]
-    g["AUX_SERVO_MIN"]  = SENSORS["aux_servo"]["min"]
-    g["AUX_SERVO_MAX"]  = SENSORS["aux_servo"]["max"]
+    _aux = SENSORS["aux_servo"]
+    g["CAM_SERVO_KEY"]  = _aux["camera"]["key"]
+    g["SOIL_SERVO_KEY"] = _aux["soil"]["key"]
+    g["AUX_SERVO_MIN"]  = _aux["min"]
+    g["AUX_SERVO_MAX"]  = _aux["max"]
     g["SERVER_HOST"]    = SENSORS["server"]["host"]
     g["SERVER_PORT"]    = SENSORS["server"]["port"]
 

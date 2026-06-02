@@ -83,7 +83,11 @@ async function refreshTrack() {
     poiLayer.clearLayers();
     for (const p of d.pois) {
       let label = p.type;
-      if (p.type === 'soil')           label = `💧 رطوبة ${p.props.moisture}%`;
+      if (p.type === 'soil') {
+        label = `💧 ${p.props.moisture}%`;
+        if (p.props.salinity != null) label += ` · 🧂 ${p.props.salinity}`;
+        if (p.props.temp != null)     label += ` · 🌡️ ${p.props.temp}°`;
+      }
       else if (p.type === 'weed')      label = `🌿 خطر: ${p.props.risk || ''}`;
       else if (p.type === 'lidar_obstacle') label = `⛔ ${p.props.dist || ''}مم`;
       L.marker([p.lat, p.lon], { icon: poiIcon(p.type, p.props.risk) })

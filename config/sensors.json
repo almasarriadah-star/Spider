@@ -9,9 +9,19 @@
                "header": "5A5A0206", "encoding": "i16", "scale": 100.0,
                "init": ["A52501CB", "A53502DC"],
                "_help": "موديول GY-MCU90640: رأس 5A5A0206، 768×int16 (°C×100). init=أوامر بدء البث (4Hz + تشغيل تلقائي). encoding=i16|i16be|u16|u16be|f32." },
-  "soil":    { "port": "/dev/ttyUSB0", "baud": 9600, "dry_raw": 26000, "wet_raw": 11000 },
+  "soil":    { "port": "/dev/ttyUSB0", "slave_id": 1, "baud": 4800,
+               "registers": { "moisture": 0, "temp": 1, "ec": 2 },
+               "scales":    { "moisture": 0.1, "temp": 0.1, "ec": 1.0 },
+               "ec_unit": "uS/cm", "poll_s": 1.0,
+               "_help": "حساس صناعي Modbus RTU عبر USB→RS485 (minimalmodbus). slave_id/baud حسب الموديول (المكتشَف: ID 1 @4800). registers=أرقام سجلات القراءة، scales=معامل الضرب (رطوبة/حرارة ÷10 ⇒ 0.1، EC خام ⇒ 1.0). الملوحة = EC." },
   "gas":     { "gpio": 6, "active_low": true },
   "dht22":   { "gpio": 16 },
-  "aux_servo": { "camera_key": "R9", "soil_key": "L9", "min": 0, "max": 180 },
+  "aux_servo": {
+    "min": 0, "max": 180,
+    "camera": { "key": "R9", "invert": false, "home": 90 },
+    "soil":   { "key": "L9", "invert": false, "raise_angle": 90, "lower_angle": 20 },
+    "measure": { "body_descend": true, "body_move": "body_down",
+                 "body_speed": 0.6, "descend_s": 1.2, "settle_s": 1.5 },
+    "_help": "سيرفوان مساعدان: camera (SG90 بانوراما 180°) و soil (DS3230 إنزال الحساس). invert=قطبية معكوسة، raise_angle/lower_angle=زاويتا رفع/إنزال حساس التربة، home=وسط الكاميرا. measure=تسلسل زر قياس نقطة." },
   "server":  { "host": "0.0.0.0", "port": 5000 }
 }

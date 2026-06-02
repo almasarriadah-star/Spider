@@ -1560,8 +1560,11 @@ def _survey_loop():
                 moved = 999 if last is None else _haversine(last, (g["lat"], g["lon"]))
                 if moved >= _survey["min_dist_m"]:
                     _survey["last"] = (g["lat"], g["lon"])
+                    _sa = _soil.read_all()
                     _track_store.add_poi("soil", g["lat"], g["lon"],
-                                         {"moisture": _soil.read_percent()})
+                                         {"moisture": _sa["moisture_pct"],
+                                          "salinity": _sa["salinity"],
+                                          "temp": _sa["temp_c"]})
                     try:
                         f = _rgb_cam.read()
                         if f is not None:
@@ -1586,8 +1589,10 @@ def soil_sample():
     g = _gps.data
     if not g.get("fix"):
         return jsonify({"ok": False, "error": "no gps fix"})
-    pct = _soil.read_percent()
-    poi = _track_store.add_poi("soil", g["lat"], g["lon"], {"moisture": pct})
+    a = _soil.read_all()
+    poi = _track_store.add_poi("soil", g["lat"], g["lon"],
+                               {"moisture": a["moisture_pct"],
+                                "salinity": a["salinity"], "temp": a["temp_c"]})
     return jsonify({"ok": True, "poi": poi})
 
 
@@ -1677,8 +1682,11 @@ def _v1_lidar():
 
 
 def _v1_soil():
-    return {"moisture_pct": _soil.read_percent(), "raw": _soil.read_raw(),
-            "ready": _soil.ready, "simulate": _soil.simulate}
+    a = _soil.read_all()
+    return {"moisture_pct": a["moisture_pct"], "salinity": a["salinity"],
+            "temp_c": a["temp_c"], "ec_unit": a["ec_unit"],
+            "raw": _soil.read_raw(),
+            "ready": a["ready"], "simulate": a["simulate"]}
 
 
 def _v1_environment():
@@ -1796,13 +1804,24 @@ def v1_camera_thermal():
 
 @app.route("/api/v1/aux_servo", methods=["GET", "POST"])
 def v1_aux_servo():
-    """GET = الحالة، POST {which:camera|soil, angle:0..180} = ضبط."""
+    """GET = الحالة. POST: إمّا {which:camera|soil, angle:0..180} لضبط زاوية،
+    أو {action:deploy|retract|center} لاستخدام زوايا الإعداد (إنزال/رفع التربة/وسط الكاميرا)."""
     if request.method == "GET":
         return jsonify({"ok": True, "state": _aux.get_state()})
     d = request.json or {}
-    ok, res = _aux.set_by_name(d.get("which"), d.get("angle", 90))
-    if not ok:
-        return jsonify({"ok": False, "error": res}), 400
+    action = d.get("action")
+    if action == "deploy":
+        res = _aux.deploy_soil()
+    elif action == "retract":
+        res = _aux.retract_soil()
+    elif action == "center":
+        res = _aux.center_camera()
+    elif action:
+        return jsonify({"ok": False, "error": "action=deploy|retract|center"}), 400
+    else:
+        ok, res = _aux.set_by_name(d.get("which"), d.get("angle", 90))
+        if not ok:
+            return jsonify({"ok": False, "error": res}), 400
     return jsonify({"ok": True, "angle": res, "state": _aux.get_state()})
 
 
@@ -1827,8 +1846,11 @@ def _get_sensor_readings():
     lidar_nearest = round(min(vals)) if vals else None
     tm = _thermal_cam.read_matrix()
     thermal_avg = round(float(tm.mean()), 1) if tm is not None else None
+    s = _soil.read_all()
     return {
-        "soil": _soil.read_percent(),
+        "soil": s["moisture_pct"],
+        "soil_salinity": s["salinity"],
+        "soil_temp": s["temp_c"],
         "air_temp": air["temp"],
         "air_humidity": air["humidity"],
         "gas_alarm": _gas.alarm(),
@@ -1847,10 +1869,69 @@ def v1_geo_sample():
     r = _get_sensor_readings()
     s = _geo_sampler.take(_gps.data, r["soil"], r["air_temp"],
                           r["air_humidity"], r["gas_alarm"],
-                          r["lidar_nearest"], r["thermal_avg"])
+                          r["lidar_nearest"], r["thermal_avg"],
+                          r.get("soil_salinity"), r.get("soil_temp"))
     if s is None:
         return jsonify({"ok": False, "error": "no gps fix"}), 400
     return jsonify({"ok": True, "sample": s})
+
+
+@app.route("/api/v1/soil/measure_point", methods=["POST"])
+@app.route("/api/soil/measure_point", methods=["POST"])
+def v1_soil_measure_point():
+    """قياس نقطة: نزول الجسم (اختياري) → إنزال سيرفو التربة → استقرار → قراءة الحساس →
+    رفع السيرفو → وقوف → تثبيت النقطة على الخريطة عند إحداثيات GPS."""
+    from spider.moves import get_body_targets, run_body
+    from spider import config as _cfgmod
+    m = _cfgmod.SENSORS["aux_servo"].get("measure", {})
+    speed = float(m.get("body_speed", 0.6))
+    steps = max(4, int(10 / speed))
+    delay = max(0.01, 0.03 / speed)
+
+    def _body(move):
+        t = get_body_targets(move)
+        if t is None:
+            return None
+        return run_body(move, {k: max(45, min(135, v)) for k, v in t.items()},
+                        steps, delay)
+
+    # 1) نزول الجسم (إن مفعّلاً) — يفشل إن كانت المشية نشطة (الملكية محجوزة).
+    descended = False
+    if m.get("body_descend", True):
+        res = _body(m.get("body_move", "body_down"))
+        if res is False:
+            return jsonify({"ok": False, "error": "busy — أوقف المشي أولاً"}), 409
+        if res:
+            descended = True
+            _time_mod.sleep(float(m.get("descend_s", 1.2)))
+
+    # 2) إنزال السيرفو → استقرار → قراءة → رفع.
+    _aux.deploy_soil()
+    _time_mod.sleep(float(m.get("settle_s", 1.5)))
+    reading = _soil.read_all()
+    _aux.retract_soil()
+
+    # 3) إعادة الجسم للوقوف.
+    if descended:
+        _body("stand")
+        _time_mod.sleep(float(m.get("descend_s", 1.2)))
+
+    # 4) تثبيت النقطة (إن وُجد fix) — POI للخريطة + عينة جغرافية كاملة.
+    g = _gps_enriched()
+    poi, mapped = None, False
+    if g.get("fix"):
+        poi = _track_store.add_poi("soil", g["lat"], g["lon"],
+                                   {"moisture": reading["moisture_pct"],
+                                    "salinity": reading["salinity"],
+                                    "temp": reading["temp_c"]})
+        r = _get_sensor_readings()
+        _geo_sampler.take(_gps.data, reading["moisture_pct"], r["air_temp"],
+                          r["air_humidity"], r["gas_alarm"], r["lidar_nearest"],
+                          r["thermal_avg"], reading["salinity"], reading["temp_c"])
+        mapped = True
+    return jsonify({"ok": True, "reading": reading, "mapped": mapped, "poi": poi,
+                    "gps": {"lat": g.get("lat"), "lon": g.get("lon"),
+                            "fix": g.get("fix"), "estimated": g.get("estimated")}})
 
 
 @app.route("/api/v1/geo/samples")
@@ -1870,8 +1951,8 @@ def v1_geo_heatmap():
 
     # حساب حدود لكل مقياس (لتلوين الخريطة)
     metrics = {}
-    for key in ["soil_moisture", "air_temp", "air_humidity",
-                "lidar_nearest", "thermal_avg"]:
+    for key in ["soil_moisture", "soil_salinity", "soil_temp", "air_temp",
+                "air_humidity", "lidar_nearest", "thermal_avg"]:
         vals = [s[key] for s in samples if s.get(key) is not None]
         if vals:
             metrics[key] = {"min": round(min(vals), 1), "max": round(max(vals), 1)}
@@ -1905,6 +1986,12 @@ def v1_geo_auto_dist():
     dist = float(d.get("dist", 0.5))
     _geo_sampler.min_dist_m = max(0.1, dist)
     return jsonify({"ok": True, "min_dist_m": _geo_sampler.min_dist_m})
+
+
+@app.route("/soil")
+def soil_page():
+    """صفحة التربة المستقلة: قراءات حيّة + قياس نقطة + سجل + خريطة مصغّرة."""
+    return render_template("soil.html")
 
 
 @app.route("/heatmap")

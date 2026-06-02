@@ -20,7 +20,8 @@
 | GET | `/api/v1/imu` | اتجاه/ميلان BNO085 |
 | GET | `/api/v1/gps` | الموقع/السرعة/الاتجاه |
 | GET | `/api/v1/lidar` | مسح LD06 360° + أقرب عائق |
-| GET | `/api/v1/soil` | رطوبة التربة % |
+| GET | `/api/v1/soil` | تربة: رطوبة % + ملوحة (EC) + حرارة °C |
+| POST | `/api/v1/soil/measure_point` | **قياس نقطة**: نزول جسم + إنزال الحساس + قراءة + تثبيت على الخريطة |
 | GET | `/api/v1/environment` | غاز MQ135 + حرارة/رطوبة الجو (DHT22) |
 | GET | `/api/v1/thermal?full=1` | إحصاء حراري (والمصفوفة 24×32 عند full) |
 | GET | `/api/v1/servos` | زوايا الأرجل + السيرفوات المساعدة |
@@ -79,8 +80,27 @@
 
 ### `GET /api/v1/soil`
 ```json
-{ "moisture_pct": 62.5, "raw": 18450, "ready": true, "simulate": false }
+{ "moisture_pct": 62.5, "salinity": 820, "temp_c": 23.4, "ec_unit": "uS/cm",
+  "raw": 625, "ready": true, "simulate": false }
 ```
+حساس صناعي **Modbus RTU** (USB→RS485). `salinity` = التوصيلية الكهربائية (EC) — مؤشّر الملوحة،
+بوحدة `ec_unit`. `temp_c` حرارة التربة. السجلات/المعاملات قابلة للضبط من `config/sensors.json → soil`.
+
+### `POST /api/v1/soil/measure_point`
+ينفّذ تسلسل **قياس نقطة** آلياً ويثبّتها على الخريطة:
+نزول الجسم (`body_down`، إن مفعّلاً) → إنزال سيرفو التربة لزاوية الغرز → استقرار → قراءة الحساس →
+رفع السيرفو → وقوف → تسجيل POI عند إحداثيات GPS. (alias: `POST /api/soil/measure_point`)
+```json
+{ "ok": true,
+  "reading": { "moisture_pct": 61.0, "salinity": 790, "temp_c": 23.1, "ec_unit": "uS/cm",
+               "ready": true, "simulate": false },
+  "mapped": true,
+  "poi": { "id": "a1b2c3d4", "type": "soil", "lat": 34.0684, "lon": 36.7467, "props": {...} },
+  "gps": { "lat": 34.0684, "lon": 36.7467, "fix": true, "estimated": false } }
+```
+- `409 busy` إن كانت المشية نشطة (لا يمكن إنزال الجسم). أوقف الحركة ثم أعِد المحاولة.
+- بلا fix: `mapped:false` و`poi:null` لكن `reading` يبقى صالحاً. التسلسل/الزوايا من
+  `config/sensors.json → aux_servo.measure` و`aux_servo.soil`.
 
 ### `GET /api/v1/environment`
 ```json
@@ -114,10 +134,13 @@
 
 ### `GET/POST /api/v1/aux_servo`
 - `GET` → `{ "ok": true, "state": { "camera": 45, "soil": 90 } }`
-- `POST` (JSON) → `{ "which": "camera"|"soil", "angle": 0..180 }`
+- `POST` ضبط زاوية → `{ "which": "camera"|"soil", "angle": 0..180 }`
+- `POST` بأمر جاهز → `{ "action": "deploy"|"retract"|"center" }`
+  (`deploy`/`retract` = إنزال/رفع سيرفو التربة بزوايا الإعداد، `center` = وسط الكاميرا)
   ```json
   { "ok": true, "angle": 45, "state": { "camera": 45, "soil": 90 } }
   ```
+  القطبية وزوايا الرفع/الإنزال والوسط تُضبط من `config/sensors.json → aux_servo`.
 
 ### `GET /api/v1/config`
 يُرجع `{ "ok": true, "sensors": { ... } }` — محتوى `config/sensors.json` الفعّال.
@@ -170,9 +193,18 @@ while True:
   "thermal": { "port": "/dev/ttyAMA4", "baud": 115200, "rows": 24, "cols": 32,
                "header": "5A5A0206", "encoding": "i16", "scale": 100.0,
                "init": ["A52501CB", "A53502DC"] },
-  "soil":  { "port": "/dev/ttyUSB0", "baud": 9600, "dry_raw": 26000, "wet_raw": 11000 },
+  "soil":  { "port": "/dev/ttyUSB0", "slave_id": 1, "baud": 4800,
+             "registers": { "moisture": 0, "temp": 1, "ec": 2 },
+             "scales": { "moisture": 0.1, "temp": 0.1, "ec": 1.0 }, "ec_unit": "uS/cm" },
   "gas":   { "gpio": 6, "active_low": true },
-  "dht22": { "gpio": 16 }
+  "dht22": { "gpio": 16 },
+  "aux_servo": {
+    "min": 0, "max": 180,
+    "camera": { "key": "R9", "invert": false, "home": 90 },
+    "soil":   { "key": "L9", "invert": false, "raise_angle": 90, "lower_angle": 20 },
+    "measure": { "body_descend": true, "body_move": "body_down",
+                 "body_speed": 0.6, "descend_s": 1.2, "settle_s": 1.5 }
+  }
 }
 ```
 - أي مفتاح غير مذكور يأخذ الافتراضي تلقائياً (دمج جزئي).
