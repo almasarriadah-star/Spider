@@ -19,7 +19,7 @@
   "aux_servo": {
     "min": 0, "max": 180,
     "camera": { "key": "R9", "invert": false, "home": 90 },
-    "soil":   { "key": "L9", "invert": false, "raise_angle": 90, "lower_angle": 20 },
+    "soil":   { "key": "L9", "invert": false, "max": 360, "raise_angle": 90, "lower_angle": 20 },
     "measure": { "body_descend": true, "body_move": "body_down",
                  "body_speed": 0.6, "descend_s": 1.2, "settle_s": 1.5 },
     "_help": "سيرفوان مساعدان: camera (SG90 بانوراما 180°) و soil (DS3230 إنزال الحساس). invert=قطبية معكوسة، raise_angle/lower_angle=زاويتا رفع/إنزال حساس التربة، home=وسط الكاميرا. measure=تسلسل زر قياس نقطة." },

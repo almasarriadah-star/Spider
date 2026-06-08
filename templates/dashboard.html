@@ -316,6 +316,22 @@ select{background:#131318;color:#e0e0e0;border:1px solid #333;border-radius:8px;
     <div id="surveyStatusTxt" style="font-size:11px;color:#666;text-align:center;margin-top:6px"></div>
   </div>
 
+  <!-- تحليل التربة (صفحة كاملة) -->
+  <a class="card" href="/soil" target="_blank" style="text-decoration:none;display:block;cursor:pointer;color:inherit">
+    <h3>🌱 تحليل التربة — صفحة كاملة</h3>
+    <div class="grid2">
+      <div class="sensor-val">
+        <div class="label">💧 رطوبة حيّة</div>
+        <div class="num" id="soilNow2" style="color:#58a6ff">--%</div>
+      </div>
+      <div class="sensor-val">
+        <div class="label">🧂 ملوحة</div>
+        <div class="num" id="soilSalt" style="color:#d29922">--</div>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:8px;color:#58a6ff;font-size:13px">اضغط لفتح صفحة التحليل ← إنزال/رفع السيرفو · قياس نقطة · خريطة</div>
+  </a>
+
   <!-- البيئة: غاز MQ135 + DHT22 -->
   <div class="card">
     <h3>🌡️ البيئة <span id="envStatusTxt" style="font-size:10px;color:#666"></span></h3>
@@ -345,7 +361,7 @@ select{background:#131318;color:#e0e0e0;border:1px solid #333;border-radius:8px;
     </div>
     <div>
       <div class="label">سيرفو التربة (DS3230 · L9): <span id="soilAngLbl">90°</span></div>
-      <input type="range" id="soilServo" min="0" max="180" step="1" value="90"
+      <input type="range" id="soilServo" min="0" max="360" step="1" value="90"
              style="width:100%" oninput="auxServo('soil',this.value,'soilAngLbl')">
     </div>
   </div>
@@ -436,6 +452,7 @@ select{background:#131318;color:#e0e0e0;border:1px solid #333;border-radius:8px;
       <a class="btn btn-gray btn-full" href="/map"    target="_blank">الخريطة</a>
       <a class="btn btn-gray btn-full" href="/heatmap" target="_blank">🔥 خريطة حرارية</a>
       <a class="btn btn-gray btn-full" href="/thermal-view" target="_blank">🌡️ عرض حراري FLIR</a>
+      <a class="btn btn-gray btn-full" href="/soil"   target="_blank">🌱 تحليل التربة</a>
       <a class="btn btn-gray btn-full" href="/sim"    target="_blank">محاكاة 3D</a>
       <a class="btn btn-gray btn-full" href="/legacy" target="_blank">Legacy</a>
     </div>
@@ -684,6 +701,16 @@ async function toggleSurvey(){
   document.getElementById('surveyStatusTxt').textContent=surveyOn?'✅ المسح الآلي شغّال':'';
 }
 setInterval(soilNow,3000); soilNow();
+
+// ════ تحديث كارت تحليل التربة ════
+async function soilCardUpdate(){
+  try{
+    const d=await (await fetch('/api/v1/soil')).json();
+    if(d.moisture_pct!=null) document.getElementById('soilNow2').textContent=d.moisture_pct+'%';
+    if(d.salinity!=null) document.getElementById('soilSalt').textContent=d.salinity;
+  }catch(e){}
+}
+setInterval(soilCardUpdate,3000); soilCardUpdate();
 
 // ════ البيئة: غاز + DHT22 ════
 async function envNow(){
