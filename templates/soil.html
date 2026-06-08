@@ -170,9 +170,22 @@ async function auxPost(payload) {
   });
   refreshAux();
 }
-// إنزال/رفع التربة يستخدمان زوايا الإعداد (lower_angle/raise_angle) عبر action.
-function auxDeploy()  { auxPost({ action: 'deploy'  }); }
-function auxRetract() { auxPost({ action: 'retract' }); }
+// إنزال: خفض الجسم (نفس حركة "انخفاض" في شاشة التحكم) ثم إنزال سيرفو التربة.
+async function auxDeploy() {
+  await fetch('/api/body/move', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ move: 'body_down', speed: 1.0 })
+  });
+  auxPost({ action: 'deploy' });
+}
+// رفع: رفع سيرفو التربة ثم إعادة الجسم للوقوف.
+async function auxRetract() {
+  await auxPost({ action: 'retract' });
+  await fetch('/api/body/move', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ move: 'stand', speed: 1.0 })
+  });
+}
 async function auxSet(which, angle) { return auxPost({ which, angle }); }
 async function camMove(v) {
   document.getElementById('camAngle').textContent = v + '°';
